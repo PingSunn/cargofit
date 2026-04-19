@@ -17,9 +17,9 @@ public record ContainerSpec(
     int NominalL,
     int NominalH)
 {
-    [JsonIgnore] public int InteriorW => NominalW - 15;
-    [JsonIgnore] public int InteriorL => NominalL - 15;
-    [JsonIgnore] public int InteriorH => NominalH - 15;
+    [JsonIgnore] public int InteriorW => NominalW - 5;
+    [JsonIgnore] public int InteriorL => NominalL - 5;
+    [JsonIgnore] public int InteriorH => NominalH - 5;
 
     public static readonly List<ContainerSpec> All =
     [
