@@ -81,7 +81,7 @@ public class IsometricCanvas : Control
     {
         if (!_dragging) return;
         var pos = e.GetPosition(this);
-        _azimuth   = _azimuthAtDrag + (pos.X - _dragStart.X) * 0.008;
+        _azimuth   = _azimuthAtDrag - (pos.X - _dragStart.X) * 0.008;
         _elevation = Math.Clamp(_elevationAtDrag - (pos.Y - _dragStart.Y) * 0.006, 0.08, 1.45);
         InvalidateVisual();
     }
@@ -95,7 +95,8 @@ public class IsometricCanvas : Control
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
-        _azimuth += e.Delta.X * 0.08 - e.Delta.Y * 0.08;
+        _azimuth   -= e.Delta.X * 0.08;
+        _elevation  = Math.Clamp(_elevation + e.Delta.Y * 0.05, 0.08, 1.45);
         InvalidateVisual();
     }
 
@@ -107,6 +108,9 @@ public class IsometricCanvas : Control
 
         var bounds = Bounds;
         if (bounds.Width < 10 || bounds.Height < 10) return;
+
+        // Make entire area pointer-hittable (not just drawn geometry)
+        context.FillRectangle(Brushes.Transparent, new Rect(0, 0, bounds.Width, bounds.Height));
 
         if (Container is null)
         {
@@ -171,7 +175,7 @@ public class IsometricCanvas : Control
             DrawFloorFill(context, cW, cL, Iso);
             DrawEdgeLabels(context, cW, cL, cH, Iso);
             DrawHint(context, bounds, "เลือกสินค้าแล้วกด คำนวณ");
-            DrawHint2(context, bounds, "ลากเพื่อหมุน  ·  Scroll เพื่อหมุนซ้าย-ขวา");
+            DrawHint2(context, bounds, "ลากเพื่อหมุน  ·  Scroll ซ้าย-ขวา = หมุน  ·  Scroll ขึ้น-ลง = เอียง");
             return;
         }
 
