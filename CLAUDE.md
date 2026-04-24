@@ -21,7 +21,8 @@ Avalonia 11 desktop application (`logistic/`) targeting `net10.0`.
 
 - **Entry point**: `logistic/Program.cs` — bootstraps `App` via `AppBuilder`
 - **App**: `App.axaml` / `App.axaml.cs` — applies `FluentTheme`, creates `MainWindow`
-- **Main window**: `MainWindow.axaml` / `MainWindow.axaml.cs`
+- **Main window**: `MainWindow.axaml` / `MainWindow.axaml.cs` — single-page app; loads `PlanningView` directly on startup. Settings opens `SettingsWindow` (UserControl) in a dialog `Window`.
+- **Planning view**: `PlanningView.cs` — code-behind UserControl (no AXAML); two-column layout: left = isometric canvas + stats, right = container selector, product search/checklist, quantity inputs, calculate button.
 - **Output type**: `WinExe`
 - **Bindings**: `AvaloniaUseCompiledBindingsByDefault=true` — use compiled bindings (`x:DataType`) not reflection-based ones
 - **Nullable**: enabled — all code must be null-safe

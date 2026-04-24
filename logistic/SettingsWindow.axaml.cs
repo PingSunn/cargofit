@@ -76,7 +76,7 @@ public partial class SettingsWindow : UserControl
 
         var subtitle = new TextBlock
         {
-            Text = "Enter nominal (actual) dimensions — 15 cm is subtracted per side for calculations.",
+            Text = "Enter nominal (actual) dimensions — 5 cm is subtracted per side for calculations.",
             FontSize = 13,
             Foreground = new SolidColorBrush(Color.Parse("#64748B")),
             Margin = new Thickness(0, 6, 0, 0),
@@ -225,7 +225,7 @@ public partial class SettingsWindow : UserControl
             int.TryParse(wBox.Text, out var w);
             int.TryParse(lBox.Text, out var l);
             int.TryParse(hBox.Text, out var h);
-            hint.Text = $"Effective interior: {w - 15} × {l - 15} × {h - 15} cm";
+            hint.Text = $"Effective interior: {w - 5} × {l - 5} × {h - 5} cm";
         }
 
         wBox.TextChanged += (_, _) => UpdateHint();
@@ -326,6 +326,8 @@ public partial class SettingsWindow : UserControl
         TextBox Description, TextBox Content, TextBox PackSize,
         TextBox Weight, CheckBox RscBox, CheckBox AutoBox,
         TextBox W, TextBox L, TextBox H,
+        TextBox MaxLayers,
+        LayerPatternEditor PatternA, LayerPatternEditor PatternB,
         Border Card, TextBlock CbmHint);
 
     private UserControl BuildProductView()
@@ -526,9 +528,79 @@ public partial class SettingsWindow : UserControl
         UpdateCbm();
 
         inner.Children.Add(cbmHint);
+
+        // Row 5 — Pattern A (ชั้นคี่)
+        inner.Children.Add(new TextBlock
+        {
+            Text = "Pattern A — ชั้นคี่ (1, 3, 5...)",
+            FontSize = 11,
+            FontWeight = FontWeight.Medium,
+            Foreground = new SolidColorBrush(Color.Parse("#94A3B8")),
+            Margin = new Thickness(0, 6, 0, 2)
+        });
+
+        double initW = spec?.W ?? 25.0;
+        double initL = spec?.L ?? 38.0;
+        var patternAEditor = new LayerPatternEditor(initW, initL);
+        if (spec?.PatternA is { Length: > 0 } pa) patternAEditor.Pattern = pa;
+        inner.Children.Add(patternAEditor);
+
+        // Row 6 — Pattern B (ชั้นคู่ — Interlock)
+        inner.Children.Add(new TextBlock
+        {
+            Text = "Pattern B — ชั้นคู่ Interlock (2, 4, 6...)",
+            FontSize = 11,
+            FontWeight = FontWeight.Medium,
+            Foreground = new SolidColorBrush(Color.Parse("#94A3B8")),
+            Margin = new Thickness(0, 6, 0, 2)
+        });
+
+        var patternBEditor = new LayerPatternEditor(initW, initL);
+        if (spec?.PatternB is { Length: > 0 } pb) patternBEditor.Pattern = pb;
+        inner.Children.Add(patternBEditor);
+
+        // Row 7 — Max layers per stack
+        var stackRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+        stackRow.Children.Add(new TextBlock
+        {
+            Text = "ชั้นต่อ ต๊ง",
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#64748B")),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var maxLayersBox = new TextBox
+        {
+            Text = (spec?.MaxLayers ?? 0).ToString(),
+            Width = 60,
+            FontSize = 12,
+            TextAlignment = TextAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Watermark = "0"
+        };
+        stackRow.Children.Add(maxLayersBox);
+        stackRow.Children.Add(new TextBlock
+        {
+            Text = "(0 = เต็มความสูงตู้)",
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.Parse("#94A3B8")),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        inner.Children.Add(stackRow);
+
         card.Child = inner;
 
-        var productRow = new ProductEditRow(descBox, contentBox, packBox, weightBox, rscBox, autoBox, wBox, lBox, hBox, card, cbmHint);
+        // Keep editor proportions in sync when box dimensions change
+        wBox.TextChanged += (_, _) =>
+        {
+            if (double.TryParse(wBox.Text, out var w)) { patternAEditor.BoxW = w; patternBEditor.BoxW = w; }
+        };
+        lBox.TextChanged += (_, _) =>
+        {
+            if (double.TryParse(lBox.Text, out var l)) { patternAEditor.BoxL = l; patternBEditor.BoxL = l; }
+        };
+
+        var productRow = new ProductEditRow(descBox, contentBox, packBox, weightBox, rscBox, autoBox, wBox, lBox, hBox,
+            maxLayersBox, patternAEditor, patternBEditor, card, cbmHint);
         _productEditRows.Add(productRow);
 
         delBtn.Click += (_, _) =>
@@ -550,6 +622,7 @@ public partial class SettingsWindow : UserControl
             double.TryParse(row.W.Text, out var w);
             double.TryParse(row.L.Text, out var l);
             double.TryParse(row.H.Text, out var h);
+            int.TryParse(row.MaxLayers.Text, out var maxLayers);
             specs.Add(new ProductSpec(
                 row.Description.Text.Trim(),
                 row.Content.Text?.Trim() ?? "",
@@ -557,7 +630,10 @@ public partial class SettingsWindow : UserControl
                 weight,
                 row.RscBox.IsChecked == true,
                 row.AutoBox.IsChecked == true,
-                w, l, h));
+                w, l, h,
+                row.PatternA.Pattern,
+                row.PatternB.Pattern,
+                maxLayers));
         }
         return specs;
     }

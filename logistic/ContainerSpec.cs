@@ -8,7 +8,7 @@ namespace logistic;
 /// <summary>
 /// Represents a shipping container type.
 /// Nominal = real physical size shown to the user.
-/// Interior = usable space for calculation (nominal − 15 cm per side).
+/// Interior = usable space for calculation (nominal − 5 cm per side).
 /// </summary>
 public record ContainerSpec(
     string Name,
@@ -28,9 +28,7 @@ public record ContainerSpec(
         new("ตู้ไฮคิวบ์", "40 ft HC", 244, 1203, 290),
     ];
 
-    private static readonly string FilePath = Path.Combine(
-        System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
-        "logistic", "containers.json");
+    private static readonly string FilePath = Path.Combine(AppPaths.DataDir, "containers.json");
 
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
