@@ -382,6 +382,46 @@ public partial class SettingsWindow : UserControl
 
         root.Children.Add(header);
 
+        // ── Search / filter ───────────────────────────────────────────────────
+        var searchBox = new TextBox
+        {
+            Watermark = "ค้นหาสินค้า (ชื่อ, ปริมาณ, pack size)…",
+            FontSize  = 13,
+            Margin    = new Thickness(0, 0, 0, 4)
+        };
+        var matchLabel = new TextBlock
+        {
+            FontSize   = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#64748B")),
+            Margin     = new Thickness(0, 4, 0, 0),
+            IsVisible  = false
+        };
+        searchBox.TextChanged += (_, _) =>
+        {
+            var q = searchBox.Text?.Trim().ToLowerInvariant() ?? "";
+            if (string.IsNullOrEmpty(q))
+            {
+                foreach (var row in _productEditRows) row.Card.IsVisible = true;
+                matchLabel.IsVisible = false;
+            }
+            else
+            {
+                int count = 0;
+                foreach (var row in _productEditRows)
+                {
+                    bool match = (row.Description.Text?.ToLowerInvariant().Contains(q) ?? false)
+                              || (row.Content.Text?.ToLowerInvariant().Contains(q) ?? false)
+                              || (row.PackSize.Text?.ToLowerInvariant().Contains(q) ?? false);
+                    row.Card.IsVisible = match;
+                    if (match) count++;
+                }
+                matchLabel.Text     = $"พบ {count} รายการ";
+                matchLabel.IsVisible = true;
+            }
+        };
+        root.Children.Add(searchBox);
+        root.Children.Add(matchLabel);
+
         // ── Rows ─────────────────────────────────────────────────────────────
         _productRowsPanel = new StackPanel { Spacing = 10 };
         foreach (var p in ProductSpec.All)
