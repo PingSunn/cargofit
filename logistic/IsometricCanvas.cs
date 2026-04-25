@@ -13,7 +13,8 @@ public record BoxPlacement(
     double BW, double BL, double BH,
     int ProductIndex,
     bool Rotated = false,
-    int StackIndex = 0);
+    int StackIndex = 0,
+    int LayerIndex = 0);
 
 public class IsometricCanvas : Control
 {
@@ -55,14 +56,20 @@ public class IsometricCanvas : Control
     private double _cutRatio = 1.0; // 0–1: fraction of container height to show
 
     // ── Canvas config ─────────────────────────────────────────────────────────
-    private bool _wireframeMode  = false;
-    private bool _colorByLayer   = false;
-    private bool _showDimensions = true;
+    private bool _wireframeMode      = false;
+    private bool _colorByLayer       = false;
+    private bool _colorByStackLayer  = false;
+    private bool _showDimensions     = true;
+    private HashSet<int> _hiddenProducts = [];
 
-    public void SetCutRatio(double ratio)     { _cutRatio      = Math.Clamp(ratio, 0, 1); InvalidateVisual(); }
-    public void SetWireframeMode(bool v)      { _wireframeMode  = v; InvalidateVisual(); }
-    public void SetColorByLayer(bool v)       { _colorByLayer   = v; InvalidateVisual(); }
-    public void SetShowDimensions(bool v)     { _showDimensions = v; InvalidateVisual(); }
+    public void SetCutRatio(double ratio)               { _cutRatio          = Math.Clamp(ratio, 0, 1); InvalidateVisual(); }
+    public void SetWireframeMode(bool v)                { _wireframeMode     = v; InvalidateVisual(); }
+    public void SetColorByLayer(bool v)                 { _colorByLayer      = v; InvalidateVisual(); }
+    public void SetColorByStackLayer(bool v)            { _colorByStackLayer = v; InvalidateVisual(); }
+    public void SetShowDimensions(bool v)               { _showDimensions    = v; InvalidateVisual(); }
+    public void SetHiddenProducts(HashSet<int> hidden)  { _hiddenProducts    = hidden; InvalidateVisual(); }
+
+    public static Color GetProductColor(int productIndex) => Palette[productIndex % Palette.Length];
 
     public void ResetView()
     {
@@ -213,19 +220,25 @@ public class IsometricCanvas : Control
             return da.CompareTo(db);
         });
 
-        Dictionary<double, int>? layerIndex = null;
+        Dictionary<double, int>? zLayerMap = null;
         if (_colorByLayer)
         {
             var zLevels = clipped.Select(b => b.Z).Distinct().OrderBy(z => z).ToList();
-            layerIndex = new Dictionary<double, int>();
+            zLayerMap = new Dictionary<double, int>();
             for (int i = 0; i < zLevels.Count; i++)
-                layerIndex[zLevels[i]] = i;
+                zLayerMap[zLevels[i]] = i;
         }
 
         foreach (var box in clipped)
         {
-            Color? overrideColor = _colorByLayer && layerIndex is not null && layerIndex.TryGetValue(box.Z, out int li)
-                ? Palette[li % Palette.Length] : null;
+            Color? overrideColor = null;
+            if (_colorByLayer && zLayerMap is not null && zLayerMap.TryGetValue(box.Z, out int li))
+                overrideColor = Palette[li % Palette.Length];
+            else if (_colorByStackLayer)
+                overrideColor = box.LayerIndex % 2 == 0
+                    ? Palette[box.ProductIndex % Palette.Length]
+                    : Lighten(Palette[box.ProductIndex % Palette.Length], 0.45);
+
             if (_wireframeMode)
                 DrawBoxWireframe(context, box, Iso, overrideColor ?? Palette[box.ProductIndex % Palette.Length]);
             else
@@ -254,6 +267,7 @@ public class IsometricCanvas : Control
         var result = new List<BoxPlacement>(Placements.Count);
         foreach (var b in Placements)
         {
+            if (_hiddenProducts.Contains(b.ProductIndex)) continue;
             if (b.Z >= cutZ) continue;
             result.Add(b.Z + b.BH > cutZ ? b with { BH = cutZ - b.Z } : b);
         }
@@ -387,7 +401,7 @@ public class IsometricCanvas : Control
             if (!layerHalfHeight.TryGetValue(b.Z, out double h) || b.BH > h * 2)
                 layerHalfHeight[b.Z] = b.BH * 0.5;
         }
-        if (levels.Count < 2 || levels.Count > 20) return;
+        if (levels.Count < 2) return;
 
         var tf    = new Typeface(SansSerif);
         var brush = new SolidColorBrush(Color.Parse("#64748B"));
@@ -399,7 +413,7 @@ public class IsometricCanvas : Control
         {
             double halfH = layerHalfHeight.TryGetValue(z, out double hh) ? hh : 0;
             var p = iso(0, 0, z + halfH);
-            if (prev.HasValue && Math.Abs(prev.Value.Y - p.Y) < 10) { n++; continue; }
+            if (prev.HasValue && Math.Abs(prev.Value.Y - p.Y) < 10) { continue; }
 
             var ft = new FormattedText($"ชั้นที่ {n}",
                 System.Globalization.CultureInfo.CurrentCulture,
@@ -541,6 +555,9 @@ public class IsometricCanvas : Control
 
     private static Color Darken(Color c, double t) =>
         Color.FromRgb(Clamp(c.R * (1 - t)), Clamp(c.G * (1 - t)), Clamp(c.B * (1 - t)));
+
+    private static Color Lighten(Color c, double t) =>
+        Color.FromRgb(Clamp(c.R + (255 - c.R) * t), Clamp(c.G + (255 - c.G) * t), Clamp(c.B + (255 - c.B) * t));
 
     private static byte Clamp(double v) => (byte)Math.Clamp(v, 0, 255);
 }

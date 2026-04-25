@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -32,7 +31,8 @@ public class PlanningView : UserControl
 
     private StackPanel _quantityRows = null!;
     private IsometricCanvas _canvas = null!;
-    private TextBlock _statsText = null!;
+    private StackPanel _statsPanel = null!;
+    private readonly HashSet<int> _hiddenProducts = [];
     private Slider _cutSlider = null!;
     private TextBlock _cutLabel = null!;
 
@@ -63,22 +63,27 @@ public class PlanningView : UserControl
         var dock = new DockPanel { LastChildFill = true };
 
         // Stats card — docked to bottom
-        var statsCard = Card(padding: new Thickness(20, 14));
-        statsCard.Height = 128;
+        var statsCard = Card(padding: new Thickness(16, 12));
         statsCard.Margin = new Thickness(0, 8, 0, 0);
         DockPanel.SetDock(statsCard, Dock.Bottom);
 
-        _statsText = new TextBlock
+        _statsPanel = new StackPanel { Spacing = 5 };
+        _statsPanel.Children.Add(new TextBlock
         {
             Text = "กด Start เพื่อคำนวณการบรรจุ",
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Foreground = InkMuted,
             TextWrapping = TextWrapping.Wrap,
-            FontSize = 13,
-            LineHeight = 22
+            FontSize = 13
+        });
+
+        statsCard.Child = new ScrollViewer
+        {
+            Content = _statsPanel,
+            MaxHeight = 210,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
         };
-        statsCard.Child = _statsText;
         dock.Children.Add(statsCard);
 
         // Canvas config bar — docked above stats
@@ -117,6 +122,7 @@ public class PlanningView : UserControl
         chipRow.Children.Add(resetBtn);
         chipRow.Children.Add(MakeChip("ลวดลาย",    false, v => _canvas.SetWireframeMode(v)));
         chipRow.Children.Add(MakeChip("สีตามชั้น", false, v => _canvas.SetColorByLayer(v)));
+        chipRow.Children.Add(MakeChip("สีสลับชั้น", false, v => _canvas.SetColorByStackLayer(v)));
         chipRow.Children.Add(MakeChip("แสดงขนาด",  true,  v => _canvas.SetShowDimensions(v)));
 
         var sliderGrid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("Auto,*,38") };
@@ -235,26 +241,40 @@ public class PlanningView : UserControl
         foreach (var spec in ProductSpec.All)
         {
             var label = $"{spec.Description} {spec.Content}";
-            var cb = new CheckBox
+
+            var contentGrid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,Auto") };
+            contentGrid.Children.Add(new TextBlock
             {
-                Content = label,
+                Text = label,
                 FontSize = 12,
                 Foreground = Ink,
-                Padding = new Thickness(6, 4)
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            var packTag = new Border
+            {
+                Background = Surface,
+                BorderBrush = BorderLight,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(5, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 0, 0)
+            };
+            packTag.Child = new TextBlock { Text = spec.PackSize, FontSize = 10, Foreground = InkMuted };
+            Grid.SetColumn(packTag, 1);
+            contentGrid.Children.Add(packTag);
+
+            var cb = new CheckBox
+            {
+                Content = contentGrid,
+                FontSize = 12,
+                Foreground = Ink,
+                Padding = new Thickness(6, 7),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch
             };
             cb.IsCheckedChanged += (_, _) => UpdateQuantitySection();
-
-            var details = new TextBlock
-            {
-                Text = $"{spec.WeightPerBoxKg:G} kg  ·  {spec.Cbm:F4} m³",
-                FontSize = 10,
-                Foreground = InkMuted,
-                Margin = new Thickness(30, 0, 0, 4)
-            };
-
-            var itemStack = new StackPanel();
-            itemStack.Children.Add(cb);
-            itemStack.Children.Add(details);
 
             var wrapper = new Border
             {
@@ -262,9 +282,9 @@ public class PlanningView : UserControl
                 BorderBrush = BorderLight,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(7),
-                Padding = new Thickness(2, 0)
+                Padding = new Thickness(2, 1)
             };
-            wrapper.Child = itemStack;
+            wrapper.Child = cb;
             productStack.Children.Add(wrapper);
             _products.Add((cb, spec, wrapper));
         }
@@ -357,6 +377,127 @@ public class PlanningView : UserControl
             onToggle(on[0]);
         };
         return btn;
+    }
+
+    private Border BuildProductStatRow(
+        ProductSpec spec, int productIndex, int packed, int requested, int fullStacks, int partialBoxes)
+    {
+        int remaining = requested - packed;
+        var color = IsometricCanvas.GetProductColor(productIndex);
+        var colorBrush = new SolidColorBrush(color);
+
+        var grid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("14,*,Auto,Auto") };
+
+        // Color dot
+        grid.Children.Add(new Border
+        {
+            Width = 10, Height = 10, CornerRadius = new CornerRadius(5),
+            Background = colorBrush,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0)
+        });
+
+        // Product name
+        var nameText = new TextBlock
+        {
+            Text = $"{spec.Description} {spec.Content}",
+            FontSize = 12, FontWeight = FontWeight.Medium,
+            Foreground = Ink, VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        Grid.SetColumn(nameText, 1);
+        grid.Children.Add(nameText);
+
+        // Stats badges
+        var badges = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(8, 0) };
+
+        badges.Children.Add(new TextBlock
+        {
+            Text = $"{packed}/{requested} ลัง",
+            FontSize = 11, Foreground = packed >= requested ? Ink : InkMuted,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+
+        string stackText = (fullStacks, partialBoxes) switch
+        {
+            (0, 0) => "",
+            (0, _) => $"{partialBoxes} บางส่วน",
+            (_, 0) => $"{fullStacks} ตั้ง",
+            _      => $"{fullStacks} ตั้ง + {partialBoxes} บางส่วน"
+        };
+        if (!string.IsNullOrEmpty(stackText))
+            badges.Children.Add(new TextBlock
+            {
+                Text = stackText, FontSize = 11, Foreground = InkMuted,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+        if (remaining > 0)
+            badges.Children.Add(new TextBlock
+            {
+                Text = $"เหลือ {remaining}",
+                FontSize = 11, Foreground = new SolidColorBrush(Color.Parse("#EF4444")),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+        Grid.SetColumn(badges, 2);
+        grid.Children.Add(badges);
+
+        // Visibility toggle
+        bool[] visible = [true];
+        int capturedIndex = productIndex;
+        var toggleBtn = new Button
+        {
+            Content = "แสดง", FontSize = 10,
+            Padding = new Thickness(6, 2), CornerRadius = new CornerRadius(4),
+            Background = AccentBg, BorderBrush = AccentBorder,
+            BorderThickness = new Thickness(1), Foreground = AccentText,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Margin = new Thickness(4, 0, 0, 0)
+        };
+        toggleBtn.Click += (_, _) =>
+        {
+            visible[0] = !visible[0];
+            if (visible[0])
+            {
+                _hiddenProducts.Remove(capturedIndex);
+                toggleBtn.Background = AccentBg; toggleBtn.BorderBrush = AccentBorder;
+                toggleBtn.Foreground = AccentText; toggleBtn.Content = "แสดง";
+            }
+            else
+            {
+                _hiddenProducts.Add(capturedIndex);
+                toggleBtn.Background = SurfaceSub; toggleBtn.BorderBrush = BorderLight;
+                toggleBtn.Foreground = InkMuted; toggleBtn.Content = "ซ่อน";
+            }
+            _canvas.SetHiddenProducts(new HashSet<int>(_hiddenProducts));
+        };
+        Grid.SetColumn(toggleBtn, 3);
+        grid.Children.Add(toggleBtn);
+
+        var outer = new StackPanel { Spacing = 2 };
+        outer.Children.Add(grid);
+
+        if (packed > 0)
+        {
+            int boxesPerStack;
+            if (fullStacks > 0)
+                boxesPerStack = (packed - partialBoxes) / fullStacks;
+            else if (partialBoxes > 0)
+                boxesPerStack = partialBoxes;
+            else
+                boxesPerStack = packed;
+            if (boxesPerStack > 0)
+                outer.Children.Add(new TextBlock
+                {
+                    Text = $"CBM/Stack: {spec.Cbm * boxesPerStack:F4} m³",
+                    FontSize = 10,
+                    Foreground = InkMuted,
+                    Margin = new Thickness(20, 0, 0, 0)
+                });
+        }
+
+        return new Border { Child = outer, Padding = new Thickness(0, 2) };
     }
 
     private static Border MakeContainerItem(string name, string size, bool selected)
@@ -482,7 +623,7 @@ public class PlanningView : UserControl
             Text = "",
             Width = 62,
             FontSize = 12,
-            TextAlignment = TextAlignment.Right,
+            TextAlignment = TextAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(qty, 2);
@@ -498,27 +639,11 @@ public class PlanningView : UserControl
         Grid.SetColumn(unit, 4);
         grid.Children.Add(unit);
 
-        var cbmLine = new TextBlock
-        {
-            FontSize = 10,
-            Foreground = InkMuted,
-            Margin = new Thickness(2, 3, 0, 0)
-        };
-
-        void UpdateCbm()
+        qty.TextChanged += (_, _) =>
         {
             var clean = new string(qty.Text?.Where(char.IsDigit).ToArray() ?? []);
             if (qty.Text != clean) { qty.Text = clean; qty.CaretIndex = clean.Length; }
-            cbmLine.Text = int.TryParse(clean, out int n) && n > 0
-                ? $"CBM: {spec.Cbm:F4} × {n} = {spec.Cbm * n:F4} m³"
-                : $"CBM: {spec.Cbm:F4} m³ / ลัง";
-        }
-        qty.TextChanged += (_, _) => UpdateCbm();
-        UpdateCbm();
-
-        var stack = new StackPanel { Spacing = 0 };
-        stack.Children.Add(grid);
-        stack.Children.Add(cbmLine);
+        };
 
         var border = new Border
         {
@@ -528,7 +653,7 @@ public class PlanningView : UserControl
             CornerRadius = new CornerRadius(7),
             Padding = new Thickness(10, 7)
         };
-        border.Child = stack;
+        border.Child = grid;
         qtyBox = qty;
         return border;
     }
@@ -541,9 +666,12 @@ public class PlanningView : UserControl
         var container = ContainerSpec.All[_selectedContainerIndex];
 
         var placements = new List<BoxPlacement>();
-        var stats = new StringBuilder();
         double currentY = Clearance;
         int productIndex = 0;
+        bool anyProduct = false;
+
+        _statsPanel.Children.Clear();
+        _hiddenProducts.Clear();
 
         foreach (var (cb, spec, _) in _products)
         {
@@ -554,35 +682,47 @@ public class PlanningView : UserControl
 
             if (spec.PatternA is not { Length: > 0 })
             {
-                stats.AppendLine($"{spec.Description} {spec.Content}: ยังไม่ได้กำหนด pattern");
+                _statsPanel.Children.Add(new TextBlock
+                {
+                    Text = $"{spec.Description} {spec.Content}: ยังไม่ได้กำหนด pattern",
+                    FontSize = 12, Foreground = InkMuted
+                });
                 productIndex++;
+                anyProduct = true;
                 continue;
             }
 
             var r = PlaceProduct(container, spec, requested, currentY, productIndex, placements);
-            int packed = r.Packed;
             currentY = r.EndY;
 
-            string stackInfo = (r.FullStacks, r.PartialBoxes) switch
-            {
-                (0, 0) => "",
-                (0, _) => $"  [{r.PartialBoxes} ลัง บางส่วน]",
-                (_, 0) => $"  [{r.FullStacks} ตั้งเต็ม]",
-                _      => $"  [{r.FullStacks} ตั้งเต็ม + {r.PartialBoxes} ลัง]"
-            };
-            stats.AppendLine($"{spec.Description} {spec.Content}: {packed}/{requested} ลัง{stackInfo}" +
-                             (packed < requested ? "  (ตู้เต็ม)" : ""));
+            _statsPanel.Children.Add(BuildProductStatRow(spec, productIndex, r.Packed, requested, r.FullStacks, r.PartialBoxes));
             productIndex++;
+            anyProduct = true;
+        }
+
+        if (!anyProduct)
+        {
+            _statsPanel.Children.Add(new TextBlock
+            {
+                Text = "ยังไม่ได้เลือกสินค้า",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Foreground = InkMuted, FontSize = 13
+            });
         }
 
         double containerCbm = (double)container.InteriorW * container.InteriorL * container.InteriorH / 1_000_000;
         double usedCbm = 0;
         foreach (var p in placements) usedCbm += p.BW * p.BL * p.BH / 1_000_000;
 
-        if (containerCbm > 0)
-            stats.AppendLine($"\nรวม {usedCbm:F3} / {containerCbm:F3} m³  ({usedCbm / containerCbm * 100:F1}%)");
-
-        _statsText.Text = stats.Length > 0 ? stats.ToString().TrimEnd() : "ยังไม่ได้เลือกสินค้า";
+        if (anyProduct && containerCbm > 0)
+        {
+            _statsPanel.Children.Add(new Border { Height = 1, Background = BorderLight, Margin = new Thickness(0, 3, 0, 1) });
+            _statsPanel.Children.Add(new TextBlock
+            {
+                Text = $"รวม {usedCbm:F3} / {containerCbm:F3} m³  ({usedCbm / containerCbm * 100:F1}%)",
+                FontSize = 12, Foreground = InkMuted
+            });
+        }
         _cutSlider.Value = 1.0;
         _cutLabel.Text = "100%";
         _canvas.SetData(container, placements);
@@ -641,7 +781,7 @@ public class PlanningView : UserControl
                 bool useA    = flipStart ? (layer % 2 == 1) : (layer % 2 == 0);
                 var sections = useA ? spec.PatternA : (spec.PatternB ?? spec.PatternA);
 
-                int n = PlaceLayerAt(sections, spec, dims, stackY, z, requested - packed, productIndex, placements, stackIndex);
+                int n = PlaceLayerAt(sections, spec, dims, stackY, z, requested - packed, productIndex, placements, stackIndex, layer);
                 if (n < 0) break;
                 packed += n;
                 layersPlaced++;
@@ -660,7 +800,7 @@ public class PlanningView : UserControl
 
     private static int PlaceLayerAt(
         LayerSection[] sections, ProductSpec spec, ContainerDims dims,
-        double stackY, double z, int limit, int productIndex, List<BoxPlacement> placements, int stackIndex)
+        double stackY, double z, int limit, int productIndex, List<BoxPlacement> placements, int stackIndex, int layerIndex)
     {
         if (z + spec.H > dims.H + 0.01) return -1;
 
@@ -693,7 +833,7 @@ public class PlanningView : UserControl
                             double px = sectionX + c * bw;
                             double py = subY + r * bl;
                             if (px + bw > dims.W + 0.01 || py + bl > dims.L - Clearance + 0.01) continue;
-                            placements.Add(new BoxPlacement(px, py, z, bw, bl, spec.H, productIndex, sub.Rotated, stackIndex));
+                            placements.Add(new BoxPlacement(px, py, z, bw, bl, spec.H, productIndex, sub.Rotated, stackIndex, layerIndex));
                             packed++;
                         }
                     }
