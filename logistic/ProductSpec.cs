@@ -31,7 +31,8 @@ public record ProductSpec(
     double H,
     LayerSection[]? PatternA = null,
     LayerSection[]? PatternB = null,
-    int MaxLayers = 0)   // layers per stack (0 = fill container height)
+    int MaxLayers = 0,   // layers per stack (0 = fill container height)
+    int CondoCount = 0)  // boxes per condo row (0 = auto from container width)
 {
     [JsonIgnore] public double Cbm => W * L * H / 1_000_000;
 

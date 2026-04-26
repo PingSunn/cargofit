@@ -191,6 +191,7 @@ public class IsometricCanvas : Control
         double cutZ = _cutRatio * cH;
 
         DrawContainerWireframe(context, cW, cL, cH, Iso);
+        DrawDirectionLabels(context, cW, cL, cH, Iso);
         DrawInfoCard(context);
 
         if (Placements.Count == 0)
@@ -247,7 +248,7 @@ public class IsometricCanvas : Control
                 DrawBox(context, box, Iso, cosA, sinA, overrideColor);
         }
 
-        DrawLayerLabels(context, clipped, Iso);
+        DrawLayerLabels(context, clipped, cL, Iso);
         if (_showDimensions)
         {
             DrawEdgeLabels(context, cW, cL, cH, Iso);
@@ -391,7 +392,7 @@ public class IsometricCanvas : Control
     }
 
     private static void DrawLayerLabels(DrawingContext dc, List<BoxPlacement> clipped,
-        Func<double, double, double, Point> iso)
+        double cL, Func<double, double, double, Point> iso)
     {
         if (clipped.Count == 0) return;
 
@@ -414,15 +415,15 @@ public class IsometricCanvas : Control
         foreach (double z in levels)
         {
             double halfH = layerHalfHeight.TryGetValue(z, out double hh) ? hh : 0;
-            var p = iso(0, 0, z + halfH);
+            var p = iso(0, cL, z + halfH);
             if (prev.HasValue && Math.Abs(prev.Value.Y - p.Y) < 10) { continue; }
 
             var ft = new FormattedText($"ชั้นที่ {n}",
                 System.Globalization.CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight, tf, 10, brush);
 
-            dc.DrawLine(tick, p, new Point(p.X - 8, p.Y));
-            dc.DrawText(ft, new Point(p.X - ft.Width - 12, p.Y - ft.Height / 2));
+            dc.DrawLine(tick, p, new Point(p.X + 8, p.Y));
+            dc.DrawText(ft, new Point(p.X + 12, p.Y - ft.Height / 2));
 
             prev = p;
             n++;
@@ -487,6 +488,29 @@ public class IsometricCanvas : Control
             var mid = new Point((p0.X + p1.X) / 2, (p0.Y + p1.Y) / 2);
             dc.DrawText(ft, new Point(mid.X - ft.Width - 20, mid.Y - ft.Height / 2));
         }
+    }
+
+    private static void DrawDirectionLabels(DrawingContext dc, double cW, double cL, double cH,
+        Func<double, double, double, Point> iso)
+    {
+        var tf = new Typeface(SansSerif, FontStyle.Normal, FontWeight.SemiBold);
+
+        void DrawBadge(string text, double wx, double wy, double wz, Color color)
+        {
+            var br = new SolidColorBrush(color);
+            var ft = new FormattedText(text,
+                System.Globalization.CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight, tf, 11, br);
+            var p  = iso(wx, wy, wz);
+            var bg = new Rect(p.X - ft.Width / 2 - 5, p.Y - ft.Height / 2 - 3,
+                              ft.Width + 10, ft.Height + 6);
+            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)),
+                new Pen(br, 1), bg, 4, 4);
+            dc.DrawText(ft, new Point(p.X - ft.Width / 2, p.Y - ft.Height / 2));
+        }
+
+        DrawBadge("ประตู", cW / 2, 0,   cH / 2, Color.Parse("#0EA5E9")); // outer — door
+        DrawBadge("ในสุด", cW / 2, cL,  cH / 2, Color.Parse("#F97316")); // inner — back wall
     }
 
     private static void DrawEdgeLabels(DrawingContext dc, double cW, double cL, double cH,

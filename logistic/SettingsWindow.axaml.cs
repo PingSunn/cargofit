@@ -336,7 +336,7 @@ public partial class SettingsWindow : UserControl
         TextBox Description, TextBox Content, TextBox PackSize,
         TextBox Weight, CheckBox RscBox, CheckBox AutoBox,
         TextBox W, TextBox L, TextBox H,
-        TextBox MaxLayers,
+        TextBox MaxLayers, TextBox CondoCountBox,
         LayerPatternEditor PatternA, LayerPatternEditor PatternB,
         Border Card, TextBlock CbmHint);
 
@@ -609,7 +609,7 @@ public partial class SettingsWindow : UserControl
         if (spec?.PatternB is { Length: > 0 } pb) patternBEditor.Pattern = pb;
         inner.Children.Add(patternBEditor);
 
-        // Row 7 — Max layers per stack
+        // Row 7 — Max layers per stack + Condo count
         var stackRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
         stackRow.Children.Add(new TextBlock
         {
@@ -635,6 +635,31 @@ public partial class SettingsWindow : UserControl
             Foreground = new SolidColorBrush(Color.Parse("#94A3B8")),
             VerticalAlignment = VerticalAlignment.Center
         });
+        stackRow.Children.Add(new TextBlock
+        {
+            Text = "คอนโด",
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.Parse("#64748B")),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(12, 0, 0, 0)
+        });
+        var condoCountBox = new TextBox
+        {
+            Text = (spec?.CondoCount ?? 0).ToString(),
+            Width = 60,
+            FontSize = 12,
+            TextAlignment = TextAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Watermark = "0"
+        };
+        stackRow.Children.Add(condoCountBox);
+        stackRow.Children.Add(new TextBlock
+        {
+            Text = "(0 = อัตโนมัติ)",
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.Parse("#94A3B8")),
+            VerticalAlignment = VerticalAlignment.Center
+        });
         inner.Children.Add(stackRow);
 
         card.Child = inner;
@@ -650,7 +675,7 @@ public partial class SettingsWindow : UserControl
         };
 
         var productRow = new ProductEditRow(descBox, contentBox, packBox, weightBox, rscBox, autoBox, wBox, lBox, hBox,
-            maxLayersBox, patternAEditor, patternBEditor, card, cbmHint);
+            maxLayersBox, condoCountBox, patternAEditor, patternBEditor, card, cbmHint);
         _productEditRows.Add(productRow);
 
         delBtn.Click += (_, _) =>
@@ -673,6 +698,7 @@ public partial class SettingsWindow : UserControl
             double.TryParse(row.L.Text, out var l);
             double.TryParse(row.H.Text, out var h);
             int.TryParse(row.MaxLayers.Text, out var maxLayers);
+            int.TryParse(row.CondoCountBox.Text, out var condoCount);
             specs.Add(new ProductSpec(
                 row.Description.Text.Trim(),
                 row.Content.Text?.Trim() ?? "",
@@ -683,7 +709,7 @@ public partial class SettingsWindow : UserControl
                 w, l, h,
                 row.PatternA.Pattern,
                 row.PatternB.Pattern,
-                maxLayers));
+                maxLayers, condoCount));
         }
         return specs;
     }

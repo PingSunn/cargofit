@@ -380,7 +380,8 @@ public class PlanningView : UserControl
     }
 
     private Border BuildProductStatRow(
-        ProductSpec spec, int productIndex, int packed, int requested, int fullStacks, int partialBoxes)
+        ProductSpec spec, int productIndex, int packed, int requested,
+        int fullStacks, int mixedPlaced = 0, int condoPlaced = 0)
     {
         int remaining = requested - packed;
         var color = IsometricCanvas.GetProductColor(productIndex);
@@ -418,17 +419,24 @@ public class PlanningView : UserControl
             VerticalAlignment = VerticalAlignment.Center
         });
 
-        string stackText = (fullStacks, partialBoxes) switch
-        {
-            (0, 0) => "",
-            (0, _) => $"{partialBoxes} บางส่วน",
-            (_, 0) => $"{fullStacks} ตั้ง",
-            _      => $"{fullStacks} ตั้ง + {partialBoxes} บางส่วน"
-        };
-        if (!string.IsNullOrEmpty(stackText))
+        if (fullStacks > 0)
             badges.Children.Add(new TextBlock
             {
-                Text = stackText, FontSize = 11, Foreground = InkMuted,
+                Text = $"{fullStacks} ตั้ง", FontSize = 11, Foreground = InkMuted,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+        if (mixedPlaced > 0)
+            badges.Children.Add(new TextBlock
+            {
+                Text = $"ผสม {mixedPlaced}", FontSize = 11, Foreground = InkMuted,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+        if (condoPlaced > 0)
+            badges.Children.Add(new TextBlock
+            {
+                Text = $"คอนโด {condoPlaced}", FontSize = 11, Foreground = InkMuted,
                 VerticalAlignment = VerticalAlignment.Center
             });
 
@@ -482,9 +490,7 @@ public class PlanningView : UserControl
         {
             int boxesPerStack;
             if (fullStacks > 0)
-                boxesPerStack = (packed - partialBoxes) / fullStacks;
-            else if (partialBoxes > 0)
-                boxesPerStack = partialBoxes;
+                boxesPerStack = packed / fullStacks;
             else
                 boxesPerStack = packed;
             if (boxesPerStack > 0)
@@ -664,43 +670,20 @@ public class PlanningView : UserControl
     {
         if (_selectedContainerIndex < 0 || _selectedContainerIndex >= ContainerSpec.All.Count) return;
         var container = ContainerSpec.All[_selectedContainerIndex];
+        var dims = new ContainerDims(container.InteriorW, container.InteriorL, container.InteriorH);
 
         var placements = new List<BoxPlacement>();
-        double currentY = Clearance;
-        int productIndex = 0;
-        bool anyProduct = false;
-
         _statsPanel.Children.Clear();
         _hiddenProducts.Clear();
 
-        foreach (var (cb, spec, _) in _products)
-        {
-            if (cb.IsChecked != true) continue;
-            if (!_qtyMap.TryGetValue(spec, out var entry)) continue;
+        // Sort CBM ascending: smallest → door side, largest → back wall (adjacent to condo)
+        var sortedSpecs = _products
+            .Where(x => x.Cb.IsChecked == true && _qtyMap.ContainsKey(x.Spec))
+            .OrderBy(x => x.Spec.Cbm)
+            .Select(x => x.Spec)
+            .ToList();
 
-            int requested = int.TryParse(entry.QtyBox.Text, out int parsed) && parsed > 0 ? parsed : 1;
-
-            if (spec.PatternA is not { Length: > 0 })
-            {
-                _statsPanel.Children.Add(new TextBlock
-                {
-                    Text = $"{spec.Description} {spec.Content}: ยังไม่ได้กำหนด pattern",
-                    FontSize = 12, Foreground = InkMuted
-                });
-                productIndex++;
-                anyProduct = true;
-                continue;
-            }
-
-            var r = PlaceProduct(container, spec, requested, currentY, productIndex, placements);
-            currentY = r.EndY;
-
-            _statsPanel.Children.Add(BuildProductStatRow(spec, productIndex, r.Packed, requested, r.FullStacks, r.PartialBoxes));
-            productIndex++;
-            anyProduct = true;
-        }
-
-        if (!anyProduct)
+        if (sortedSpecs.Count == 0)
         {
             _statsPanel.Children.Add(new TextBlock
             {
@@ -708,13 +691,201 @@ public class PlanningView : UserControl
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Foreground = InkMuted, FontSize = 13
             });
+            _cutSlider.Value = 1.0;
+            _cutLabel.Text = "100%";
+            _canvas.SetData(container, placements);
+            return;
+        }
+
+        var packInfos      = RunPrimaryPacking(container, sortedSpecs, placements, out double currentY);
+        RunBalancing(packInfos, dims, placements);
+        var partialRemoved = RunPartialRemoval(packInfos, dims, placements, ref currentY);
+        var (mixedMap, condoAreaStart) = RunMixedPlacement(packInfos, dims, partialRemoved, placements, ref currentY);
+        var condoMap       = RunCondoPlacement(packInfos, dims, partialRemoved, mixedMap, condoAreaStart, placements);
+
+        // Slide the entire pack to the back wall — preserves internal order, no flip
+        if (placements.Count > 0)
+        {
+            double maxUsedY = placements.Max(p => p.Y + p.BL);
+            double shift = dims.L - Clearance - maxUsedY;
+            if (shift > 0.01)
+                for (int i = 0; i < placements.Count; i++)
+                {
+                    var p = placements[i];
+                    placements[i] = p with { Y = p.Y + shift };
+                }
+        }
+
+        BuildPackStats(packInfos, container, placements, mixedMap, condoMap);
+
+        _cutSlider.Value = 1.0;
+        _cutLabel.Text = "100%";
+        _canvas.SetData(container, placements);
+    }
+
+    private List<PackInfo> RunPrimaryPacking(
+        ContainerSpec container, List<ProductSpec> specs,
+        List<BoxPlacement> placements, out double currentY)
+    {
+        var packInfos = new List<PackInfo>();
+        currentY = Clearance;
+
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var spec = specs[i];
+            if (!_qtyMap.TryGetValue(spec, out var entry)) continue;
+            int requested = int.TryParse(entry.QtyBox.Text, out int parsed) && parsed > 0 ? parsed : 1;
+            bool hasPattern = spec.PatternA is { Length: > 0 };
+            double productStartY = currentY;
+
+            PlaceResult r;
+            if (hasPattern)
+            {
+                r = PlaceProduct(container, spec, requested, currentY, i, placements);
+                currentY = r.EndY;
+            }
+            else
+            {
+                r = new PlaceResult(0, currentY, 0, 0);
+            }
+            packInfos.Add(new PackInfo(spec, i, requested, productStartY, r, hasPattern));
+        }
+
+        return packInfos;
+    }
+
+    private static void RunBalancing(
+        List<PackInfo> packInfos, ContainerDims dims, List<BoxPlacement> placements)
+    {
+        foreach (var info in packInfos)
+        {
+            if (!info.HasPattern || info.Result.Packed <= 0) continue;
+            double stackDepth = LayerDepth(info.Spec.PatternA!, info.Spec.W, info.Spec.L);
+            int layerLimit = CalcLayerLimit(info.Spec, dims);
+            BalanceAllStacks(placements, info.ProductIndex, info.Spec, dims,
+                             info.StartY, stackDepth, layerLimit);
+        }
+    }
+
+    private static Dictionary<int, int> RunPartialRemoval(
+        List<PackInfo> packInfos, ContainerDims dims,
+        List<BoxPlacement> placements, ref double currentY)
+    {
+        var removed = new Dictionary<int, int>();
+        if (dims.L - Clearance - currentY >= 50.0) return removed;
+
+        foreach (var info in packInfos)
+        {
+            if (!info.HasPattern) continue;
+            var stacks = placements
+                .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase)
+                .GroupBy(p => p.StackIndex)
+                .OrderBy(g => g.Key)
+                .Select(g => (g.Key, Layers: g.Max(p => p.LayerIndex) + 1))
+                .ToList();
+            if (stacks.Count < 2 || stacks[^1].Layers >= stacks[^2].Layers - 1) continue;
+
+            int maxSI = stacks[^1].Key;
+            int n = placements.RemoveAll(p => p.ProductIndex == info.ProductIndex && p.StackIndex == maxSI);
+            if (n > 0) removed[info.ProductIndex] = n;
+        }
+
+        currentY = placements.Count > 0 ? placements.Max(p => p.Y + p.BL) + 0.1 : Clearance;
+        return removed;
+    }
+
+    private static (Dictionary<int, int> mixedMap, double condoAreaStart) RunMixedPlacement(
+        List<PackInfo> packInfos, ContainerDims dims,
+        Dictionary<int, int> partialRemoved,
+        List<BoxPlacement> placements, ref double currentY)
+    {
+        var withRem = packInfos
+            .Where(info => info.HasPattern)
+            .Select(info => (info, Rem: info.Requested - (info.Result.Packed - partialRemoved.GetValueOrDefault(info.ProductIndex, 0))))
+            .Where(x => x.Rem > 0)
+            .OrderByDescending(x => x.info.Spec.Cbm)
+            .ToList();
+
+        double condoAreaStart = Math.Max(currentY, dims.L - Clearance - withRem.Sum(x => x.info.Spec.L));
+        var mixedMap = new Dictionary<int, int>();
+
+        if (condoAreaStart - currentY >= 50.0 && withRem.Count > 0)
+        {
+            int totalRem = withRem.Sum(x => x.Rem);
+            double xOffset = 0;
+
+            foreach (var (info, rem) in withRem)
+            {
+                double xSlice = (double)rem / totalRem * dims.W;
+                int placed = PlaceMixedSlice(dims, info.Spec, rem, currentY,
+                                             xOffset, xSlice, condoAreaStart,
+                                             info.ProductIndex, MixedStackBase + info.ProductIndex * 10, placements);
+                if (placed > 0) mixedMap[info.ProductIndex] = placed;
+                xOffset += xSlice;
+            }
+
+            var mixedBoxes = placements.Where(p => p.StackIndex >= MixedStackBase).ToList();
+            if (mixedBoxes.Count > 0) currentY = mixedBoxes.Max(p => p.Y + p.BL) + 0.1;
+        }
+
+        return (mixedMap, condoAreaStart);
+    }
+
+    private static Dictionary<int, int> RunCondoPlacement(
+        List<PackInfo> packInfos, ContainerDims dims,
+        Dictionary<int, int> partialRemoved, Dictionary<int, int> mixedMap,
+        double condoAreaStart, List<BoxPlacement> placements)
+    {
+        double condoY = condoAreaStart;
+        var condoMap = new Dictionary<int, int>();
+
+        foreach (var info in packInfos)
+        {
+            if (!info.HasPattern) continue;
+            int primaryPacked = info.Result.Packed - partialRemoved.GetValueOrDefault(info.ProductIndex, 0);
+            int rem = info.Requested - primaryPacked - mixedMap.GetValueOrDefault(info.ProductIndex, 0);
+            if (rem <= 0) continue;
+
+            int placed = PlaceCondoStack(dims, info.Spec, rem, ref condoY,
+                                         info.ProductIndex, CondoStackBase + info.ProductIndex, placements);
+            if (placed > 0) condoMap[info.ProductIndex] = placed;
+        }
+
+        return condoMap;
+    }
+
+    private void BuildPackStats(
+        List<PackInfo> packInfos, ContainerSpec container,
+        List<BoxPlacement> placements,
+        Dictionary<int, int> mixedMap, Dictionary<int, int> condoMap)
+    {
+        foreach (var info in packInfos)
+        {
+            if (!info.HasPattern)
+            {
+                _statsPanel.Children.Add(new TextBlock
+                {
+                    Text = $"{info.Spec.Description} {info.Spec.Content}: ยังไม่ได้กำหนด pattern",
+                    FontSize = 12, Foreground = InkMuted
+                });
+                continue;
+            }
+
+            int totalPacked = placements.Count(p => p.ProductIndex == info.ProductIndex);
+            int fullStacks  = placements
+                .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase)
+                .Select(p => p.StackIndex).Distinct().Count();
+
+            _statsPanel.Children.Add(BuildProductStatRow(
+                info.Spec, info.ProductIndex, totalPacked, info.Requested,
+                fullStacks, mixedMap.GetValueOrDefault(info.ProductIndex, 0),
+                condoMap.GetValueOrDefault(info.ProductIndex, 0)));
         }
 
         double containerCbm = (double)container.InteriorW * container.InteriorL * container.InteriorH / 1_000_000;
-        double usedCbm = 0;
-        foreach (var p in placements) usedCbm += p.BW * p.BL * p.BH / 1_000_000;
+        double usedCbm = placements.Sum(p => p.BW * p.BL * p.BH / 1_000_000);
 
-        if (anyProduct && containerCbm > 0)
+        if (containerCbm > 0)
         {
             _statsPanel.Children.Add(new Border { Height = 1, Background = BorderLight, Margin = new Thickness(0, 3, 0, 1) });
             _statsPanel.Children.Add(new TextBlock
@@ -723,15 +894,15 @@ public class PlanningView : UserControl
                 FontSize = 12, Foreground = InkMuted
             });
         }
-        _cutSlider.Value = 1.0;
-        _cutLabel.Text = "100%";
-        _canvas.SetData(container, placements);
     }
 
     private record struct ContainerDims(double W, double L, double H);
     private record struct PlaceResult(int Packed, double EndY, int FullStacks, int PartialBoxes);
+    private record struct PackInfo(ProductSpec Spec, int ProductIndex, int Requested, double StartY, PlaceResult Result, bool HasPattern);
 
-    private const double Clearance = 5.0; // cm gap from each container wall
+    private const double Clearance      = 5.0;   // cm gap from each container wall
+    private const int    CondoStackBase = 1000;   // StackIndex ≥ 1000 = condo placement
+    private const int    MixedStackBase = 2000;   // StackIndex ≥ 2000 = mixed zone placement
 
     // Depth (Y) occupied by one layer of the given pattern
     private static double LayerDepth(LayerSection[] sections, double W, double L)
@@ -795,6 +966,33 @@ public class PlanningView : UserControl
             stackIndex++;
         }
 
+        // Remove partial last layer from the last stack: if the final placed layer has
+        // fewer boxes than the preceding layer, the requested count ran out mid-layer.
+        // Those boxes go back to remaining so Phases 4/5 can place them cleanly.
+        if (stackIndex > 0)
+        {
+            int lastSI = stackIndex - 1;
+            var lastGroups = placements
+                .Where(p => p.ProductIndex == productIndex && p.StackIndex == lastSI)
+                .GroupBy(p => p.LayerIndex)
+                .OrderBy(g => g.Key)
+                .ToList();
+            if (lastGroups.Count >= 2)
+            {
+                int lastCount = lastGroups[^1].Count();
+                int prevCount = lastGroups[^2].Count();
+                if (lastCount < prevCount)
+                {
+                    int layerKey = lastGroups[^1].Key;
+                    int removed = placements.RemoveAll(p =>
+                        p.ProductIndex == productIndex &&
+                        p.StackIndex == lastSI &&
+                        p.LayerIndex == layerKey);
+                    packed -= removed;
+                }
+            }
+        }
+
         return new(packed, startY + stackIndex * stackDepth, fullStacks, partialBoxes);
     }
 
@@ -844,5 +1042,148 @@ public class PlanningView : UserControl
         }
 
         return packed > 0 ? packed : -1;
+    }
+
+    // ── Effective layer limit for a product in a container ────────────────────
+    private static int CalcLayerLimit(ProductSpec spec, ContainerDims dims) =>
+        Math.Min(spec.MaxLayers > 0 ? spec.MaxLayers : int.MaxValue,
+                 (int)Math.Floor(dims.H / spec.H));
+
+    // ── Balance ALL stacks so no two differ by more than 1 layer ─────────────
+    private static void BalanceAllStacks(
+        List<BoxPlacement> placements, int productIndex,
+        ProductSpec spec, ContainerDims dims,
+        double startY, double stackDepth, int layerLimit)
+    {
+        if (spec.PatternA is not { Length: > 0 }) return;
+
+        var stackIndices = placements
+            .Where(p => p.ProductIndex == productIndex && p.StackIndex < CondoStackBase)
+            .Select(p => p.StackIndex)
+            .Distinct()
+            .OrderBy(si => si)
+            .ToList();
+
+        if (stackIndices.Count < 2) return;
+
+        var layerCounts = stackIndices.ToDictionary(si => si, si =>
+            placements
+                .Where(p => p.ProductIndex == productIndex && p.StackIndex == si)
+                .Max(p => p.LayerIndex) + 1);
+
+        if (layerCounts.Values.Max() - layerCounts.Values.Min() <= 1) return;
+
+        // Redistribute evenly: each stack gets baseL or baseL+1 layers.
+        // Last 'extra' stacks (innermost) get the extra layer.
+        int totalLayers = layerCounts.Values.Sum();
+        int numStacks   = stackIndices.Count;
+        int baseL       = Math.Min(totalLayers / numStacks, layerLimit);
+        int tallL       = Math.Min(baseL + 1, layerLimit);
+        int extra       = totalLayers % numStacks;
+
+        for (int j = 0; j < stackIndices.Count; j++)
+        {
+            int si     = stackIndices[j];
+            int target = j < (numStacks - extra) ? baseL : tallL;
+            int current = layerCounts[si];
+
+            if (current > target)
+            {
+                placements.RemoveAll(p =>
+                    p.ProductIndex == productIndex &&
+                    p.StackIndex == si &&
+                    p.LayerIndex >= target);
+            }
+            else if (current < target)
+            {
+                double stackY  = startY + si * stackDepth;
+                bool   flipIt  = (si % 2 == 1) && spec.PatternB is { Length: > 0 };
+
+                for (int layer = current; layer < target; layer++)
+                {
+                    double z     = layer * spec.H;
+                    if (z + spec.H > dims.H + 0.01) break;
+                    bool useA    = flipIt ? (layer % 2 == 1) : (layer % 2 == 0);
+                    var sections = useA ? spec.PatternA! : (spec.PatternB ?? spec.PatternA)!;
+                    PlaceLayerAt(sections, spec, dims, stackY, z, int.MaxValue,
+                                 productIndex, placements, si, layer);
+                }
+            }
+        }
+    }
+
+    // ── Mixed placement: each product gets a proportional X slice ─────────────
+    // Boxes placed left-to-right in the slice, advancing Y as needed.
+    private static int PlaceMixedSlice(
+        ContainerDims dims, ProductSpec spec, int remaining,
+        double startY, double xOffset, double xWidth,
+        double maxY,
+        int productIndex, int stackIndexBase, List<BoxPlacement> placements)
+    {
+        int colsInSlice = (int)Math.Floor(xWidth / spec.W);
+        if (colsInSlice <= 0) return 0;
+
+        int maxLayers = CalcLayerLimit(spec, dims);
+        if (maxLayers <= 0) return 0;
+
+        int placed      = 0;
+        int stackOffset = 0;
+
+        while (placed < remaining)
+        {
+            double stackY = startY + stackOffset * spec.L;
+            if (stackY + spec.L > maxY + 0.01) break;
+
+            for (int layer = 0; layer < maxLayers && placed < remaining; layer++)
+            {
+                double z = layer * spec.H;
+                if (z + spec.H > dims.H + 0.01) break;
+
+                for (int col = 0; col < colsInSlice && placed < remaining; col++)
+                {
+                    double px = xOffset + col * spec.W;
+                    if (px + spec.W > dims.W + 0.01) break;
+                    placements.Add(new BoxPlacement(
+                        px, stackY, z, spec.W, spec.L, spec.H,
+                        productIndex, false, stackIndexBase + stackOffset, layer));
+                    placed++;
+                }
+            }
+            stackOffset++;
+        }
+
+        return placed;
+    }
+
+    // ── Condo placement: 1-row-wide in Y, full width in X, stacked to layerLimit ─
+    // No rotation alternation (all boxes same orientation, ไม่ interlock).
+    private static int PlaceCondoStack(
+        ContainerDims dims, ProductSpec spec, int remaining,
+        ref double condoY, int productIndex, int condoStackIndex,
+        List<BoxPlacement> placements)
+    {
+        if (remaining <= 0) return 0;
+
+        int condoCount = spec.CondoCount > 0
+            ? spec.CondoCount
+            : (int)Math.Floor(dims.W / spec.W);
+        int maxLayers = CalcLayerLimit(spec, dims);
+        if (condoCount <= 0 || maxLayers <= 0 || condoY + spec.L > dims.L - Clearance + 0.01) return 0;
+
+        int cols = Math.Min(condoCount, (int)Math.Floor(dims.W / spec.W));
+        int placed = 0;
+        for (int layer = 0; layer < maxLayers && placed < remaining; layer++)
+        {
+            for (int col = 0; col < cols && placed < remaining; col++)
+            {
+                placements.Add(new BoxPlacement(
+                    col * spec.W, condoY, layer * spec.H, spec.W, spec.L, spec.H,
+                    productIndex, false, condoStackIndex, layer));
+                placed++;
+            }
+        }
+
+        if (placed > 0) condoY += spec.L;
+        return placed;
     }
 }
