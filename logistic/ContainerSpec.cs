@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -28,9 +29,7 @@ public record ContainerSpec(
         new("ตู้ไฮคิวบ์", "40 ft HC", 244, 1203, 290),
     ];
 
-    private static readonly string FilePath = Path.Combine(AppPaths.DataDir, "containers.json");
-
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private static readonly string FilePath = AppPaths.ContainersFile;
 
     public static void Load()
     {
@@ -38,17 +37,17 @@ public record ContainerSpec(
         try
         {
             var json = File.ReadAllText(FilePath);
-            var specs = JsonSerializer.Deserialize<ContainerSpec[]>(json, JsonOpts);
+            var specs = JsonSerializer.Deserialize<ContainerSpec[]>(json, JsonOptions.WriteIndented);
             if (specs is null || specs.Length == 0) return;
             All.Clear();
             All.AddRange(specs);
         }
-        catch { /* keep defaults on corrupt file */ }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ContainerSpec.Load] {ex}"); /* keep defaults */ }
     }
 
     public static void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(All, JsonOpts));
+        File.WriteAllText(FilePath, JsonSerializer.Serialize(All, JsonOptions.WriteIndented));
     }
 }

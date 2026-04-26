@@ -8,19 +8,8 @@ using Avalonia.Media;
 
 namespace logistic;
 
-public record BoxPlacement(
-    double X, double Y, double Z,
-    double BW, double BL, double BH,
-    int ProductIndex,
-    bool Rotated = false,
-    int StackIndex = 0,
-    int LayerIndex = 0);
-
 public class IsometricCanvas : Control
 {
-    private const string SansSerif = "sans-serif";
-    private const string MutedHex  = "#94A3B8";
-
     private static readonly Color[] Palette =
     [
         Color.Parse("#3B82F6"),
@@ -44,23 +33,29 @@ public class IsometricCanvas : Control
 
     public IsometricCanvas() { Cursor = new Cursor(StandardCursorType.Hand); }
 
-    // ── Rotation state ────────────────────────────────────────────────────────
-    private double _azimuth   = Math.PI / 4;
-    private double _elevation = 0.50;
-    private double _zoom      = 1.0;
-    private bool   _dragging;
-    private Point  _dragStart;
-    private double _azimuthAtDrag;
-    private double _elevationAtDrag;
+    // ── Camera state ──────────────────────────────────────────────────────────
+    private struct CameraState
+    {
+        public double Azimuth        = Math.PI / 4;
+        public double Elevation      = 0.50;
+        public double Zoom           = 1.0;
+        public bool   Dragging;
+        public Point  DragStart;
+        public double AzimuthAtDrag;
+        public double ElevationAtDrag;
+
+        public CameraState() { }
+    }
+    private CameraState _cam = new();
 
     // ── Layer cut ─────────────────────────────────────────────────────────────
-    private double _cutRatio = 1.0; // 0–1: fraction of container height to show
+    private double _cutRatio = 1.0;
 
     // ── Canvas config ─────────────────────────────────────────────────────────
-    private bool _wireframeMode      = false;
-    private bool _colorByLayer       = false;
-    private bool _colorByStackLayer  = false;
-    private bool _showDimensions     = true;
+    private bool _wireframeMode     = false;
+    private bool _colorByLayer      = false;
+    private bool _colorByStackLayer = false;
+    private bool _showDimensions    = true;
     private HashSet<int> _hiddenProducts = [];
 
     public void SetCutRatio(double ratio)               { _cutRatio          = Math.Clamp(ratio, 0, 1); InvalidateVisual(); }
@@ -74,9 +69,9 @@ public class IsometricCanvas : Control
 
     public void ResetView()
     {
-        _azimuth   = Math.PI / 4;
-        _elevation = 0.50;
-        _zoom      = 1.0;
+        _cam.Azimuth   = Math.PI / 4;
+        _cam.Elevation = 0.50;
+        _cam.Zoom      = 1.0;
         InvalidateVisual();
     }
 
@@ -91,35 +86,35 @@ public class IsometricCanvas : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        _dragging          = true;
-        _dragStart         = e.GetPosition(this);
-        _azimuthAtDrag     = _azimuth;
-        _elevationAtDrag   = _elevation;
+        _cam.Dragging        = true;
+        _cam.DragStart       = e.GetPosition(this);
+        _cam.AzimuthAtDrag   = _cam.Azimuth;
+        _cam.ElevationAtDrag = _cam.Elevation;
         e.Pointer.Capture(this);
         Cursor = new Cursor(StandardCursorType.SizeAll);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
-        if (!_dragging) return;
+        if (!_cam.Dragging) return;
         var pos = e.GetPosition(this);
-        _azimuth   = _azimuthAtDrag - (pos.X - _dragStart.X) * 0.008;
-        _elevation = Math.Clamp(_elevationAtDrag - (pos.Y - _dragStart.Y) * 0.006, 0.08, 1.45);
+        _cam.Azimuth   = _cam.AzimuthAtDrag - (pos.X - _cam.DragStart.X) * 0.008;
+        _cam.Elevation = Math.Clamp(_cam.ElevationAtDrag - (pos.Y - _cam.DragStart.Y) * 0.006, 0.08, 1.45);
         InvalidateVisual();
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        _dragging = false;
+        _cam.Dragging = false;
         e.Pointer.Capture(null);
         Cursor = new Cursor(StandardCursorType.Hand);
-        InvalidateVisual(); // trigger full-quality render after drag ends
+        InvalidateVisual();
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
-        _azimuth -= e.Delta.X * 0.08;
-        _zoom     = Math.Clamp(_zoom * Math.Pow(1.12, e.Delta.Y), 0.2, 8.0);
+        _cam.Azimuth -= e.Delta.X * 0.08;
+        _cam.Zoom     = Math.Clamp(_cam.Zoom * Math.Pow(1.12, e.Delta.Y), 0.2, 8.0);
         InvalidateVisual();
     }
 
@@ -132,12 +127,11 @@ public class IsometricCanvas : Control
         var bounds = Bounds;
         if (bounds.Width < 10 || bounds.Height < 10) return;
 
-        // Make entire area pointer-hittable (not just drawn geometry)
         context.FillRectangle(Brushes.Transparent, new Rect(0, 0, bounds.Width, bounds.Height));
 
         if (Container is null)
         {
-            DrawHint(context, bounds, "กำลังโหลด...");
+            CanvasLabelRenderer.DrawHint(context, bounds, "กำลังโหลด...");
             return;
         }
 
@@ -145,77 +139,36 @@ public class IsometricCanvas : Control
         double cL = Container.InteriorL;
         double cH = Container.InteriorH;
 
-        double cosA = Math.Cos(_azimuth);
-        double sinA = Math.Sin(_azimuth);
-        double cosE = Math.Cos(_elevation);
-        double sinE = Math.Sin(_elevation);
-
-        // Project a world point to screen using azimuth + elevation (unscaled, unshifted)
-        static (double sx, double sy) Project(double x, double y, double z,
-            double ca, double sa, double ce, double se)
-        {
-            double rx = x * ca - y * sa;
-            double ry = x * sa + y * ca;
-            return (rx, ry * ce - z * se);
-        }
-
-        // Compute bounding box of all 8 container corners to determine scale & origin
-        double minSx = double.MaxValue, maxSx = double.MinValue;
-        double minSy = double.MaxValue, maxSy = double.MinValue;
-        foreach (var (wx, wy, wz) in Corners(cW, cL, cH))
-        {
-            var (sx, sy) = Project(wx, wy, wz, cosA, sinA, cosE, sinE);
-            if (sx < minSx) minSx = sx;
-            if (sx > maxSx) maxSx = sx;
-            if (sy < minSy) minSy = sy;
-            if (sy > maxSy) maxSy = sy;
-        }
-
-        double spanX = maxSx - minSx;
-        double spanY = maxSy - minSy;
-        double maxW  = bounds.Width  * 0.85 * _zoom;
-        double maxH  = bounds.Height * 0.85 * _zoom;
-        double scale = Math.Min(maxW / Math.Max(spanX, 1), maxH / Math.Max(spanY, 1));
-
-        double midSx = (minSx + maxSx) / 2;
-        double midSy = (minSy + maxSy) / 2;
-        double originX = bounds.Width  / 2 - midSx * scale;
-        double originY = bounds.Height / 2 - midSy * scale;
-
-        Point Iso(double x, double y, double z)
-        {
-            var (sx, sy) = Project(x, y, z, cosA, sinA, cosE, sinE);
-            return new Point(originX + sx * scale, originY + sy * scale);
-        }
-
+        var proj  = new IsometricProjection(_cam.Azimuth, _cam.Elevation, _cam.Zoom,
+                                             cW, cL, cH, bounds.Width, bounds.Height);
         double cutZ = _cutRatio * cH;
 
-        DrawContainerWireframe(context, cW, cL, cH, Iso);
-        DrawDirectionLabels(context, cW, cL, cH, Iso);
-        DrawInfoCard(context);
+        DrawContainerWireframe(context, cW, cL, cH, proj);
+        CanvasLabelRenderer.DrawDirectionLabels(context, cW, cL, cH, proj);
+        CanvasLabelRenderer.DrawInfoCard(context, Container);
 
         if (Placements.Count == 0)
         {
-            DrawFloorFill(context, cW, cL, Iso);
-            if (_showDimensions) DrawEdgeLabels(context, cW, cL, cH, Iso);
-            DrawHint(context, bounds, "เลือกสินค้าแล้วกด คำนวณ");
-            DrawHint2(context, bounds, "ลากเพื่อหมุน/เอียง  ·  Scroll ขึ้น-ลง = ซูม  ·  Scroll ซ้าย-ขวา = หมุน");
+            DrawFloorFill(context, cW, cL, proj);
+            if (_showDimensions) CanvasLabelRenderer.DrawEdgeLabels(context, cW, cL, cH, proj);
+            CanvasLabelRenderer.DrawHint(context, bounds, "เลือกสินค้าแล้วกด คำนวณ");
+            CanvasLabelRenderer.DrawHint2(context, bounds, "ลากเพื่อหมุน/เอียง  ·  Scroll ขึ้น-ลง = ซูม  ·  Scroll ซ้าย-ขวา = หมุน");
             return;
         }
 
         var clipped = ClipToCutPlane(cutZ);
 
-        // During drag with many boxes, skip expensive filled rendering to stay responsive.
-        if (_dragging && clipped.Count > 300)
+        if (_cam.Dragging && clipped.Count > 300)
         {
-            DrawContainerWireframe(context, cW, cL, cH, Iso);
-            DrawInfoCard(context);
-            if (_showDimensions) DrawEdgeLabels(context, cW, cL, cH, Iso);
-            DrawHint(context, bounds, $"หมุนดู… ({clipped.Count} กล่อง)");
+            DrawContainerWireframe(context, cW, cL, cH, proj);
+            CanvasLabelRenderer.DrawInfoCard(context, Container);
+            if (_showDimensions) CanvasLabelRenderer.DrawEdgeLabels(context, cW, cL, cH, proj);
+            CanvasLabelRenderer.DrawHint(context, bounds, $"หมุนดู… ({clipped.Count} กล่อง)");
             return;
         }
 
-        // Painter's sort: viewer direction = (sinA*sinE, cosA*sinE, cosE) — back-to-front
+        // Painter's sort: back-to-front along viewer direction
+        double sinA = proj.SinAzimuth, cosA = proj.CosAzimuth, sinE = proj.SinElevation, cosE = proj.CosElevation;
         clipped.Sort((a, b) =>
         {
             double da = (a.X + a.BW * 0.5) * sinA * sinE + (a.Y + a.BL * 0.5) * cosA * sinE + (a.Z + a.BH * 0.5) * cosE;
@@ -243,27 +196,21 @@ public class IsometricCanvas : Control
                     : Lighten(Palette[box.ProductIndex % Palette.Length], 0.45);
 
             if (_wireframeMode)
-                DrawBoxWireframe(context, box, Iso, overrideColor ?? Palette[box.ProductIndex % Palette.Length]);
+                DrawBoxWireframe(context, box, proj, overrideColor ?? Palette[box.ProductIndex % Palette.Length]);
             else
-                DrawBox(context, box, Iso, cosA, sinA, overrideColor);
+                DrawBox(context, box, proj, overrideColor);
         }
 
-        DrawLayerLabels(context, clipped, cL, Iso);
+
         if (_showDimensions)
         {
-            DrawEdgeLabels(context, cW, cL, cH, Iso);
-            DrawStackWidthLabel(context, Iso);
+            CanvasLabelRenderer.DrawEdgeLabels(context, cW, cL, cH, proj);
+            CanvasLabelRenderer.DrawStackWidthLabel(context, Placements, proj);
         }
 
         if (_cutRatio < 0.999 && clipped.Count > 0)
-            DrawCutPlane(context, cW, cL, cutZ, Iso);
+            DrawCutPlane(context, cW, cL, cutZ, proj);
     }
-
-    private static (double, double, double)[] Corners(double w, double l, double h) =>
-    [
-        (0,0,0),(w,0,0),(0,l,0),(w,l,0),
-        (0,0,h),(w,0,h),(0,l,h),(w,l,h)
-    ];
 
     private List<BoxPlacement> ClipToCutPlane(double cutZ)
     {
@@ -280,14 +227,14 @@ public class IsometricCanvas : Control
     // ── Drawing helpers ───────────────────────────────────────────────────────
 
     private static void DrawContainerWireframe(DrawingContext dc, double cW, double cL, double cH,
-        Func<double, double, double, Point> iso)
+        IsometricProjection proj)
     {
-        var pen = new Pen(new SolidColorBrush(Color.Parse(MutedHex)), 1.5);
+        var pen = new Pen(new SolidColorBrush(Color.Parse("#94A3B8")), 1.5);
 
-        var p000 = iso(0,   0,   0);   var p100 = iso(cW, 0,   0);
-        var p010 = iso(0,   cL,  0);   var p110 = iso(cW, cL,  0);
-        var p001 = iso(0,   0,   cH);  var p101 = iso(cW, 0,   cH);
-        var p011 = iso(0,   cL,  cH);  var p111 = iso(cW, cL,  cH);
+        var p000 = proj.Project(0,   0,   0);   var p100 = proj.Project(cW, 0,   0);
+        var p010 = proj.Project(0,   cL,  0);   var p110 = proj.Project(cW, cL,  0);
+        var p001 = proj.Project(0,   0,   cH);  var p101 = proj.Project(cW, 0,   cH);
+        var p011 = proj.Project(0,   cL,  cH);  var p111 = proj.Project(cW, cL,  cH);
 
         dc.DrawLine(pen, p000, p100); dc.DrawLine(pen, p000, p010);
         dc.DrawLine(pen, p100, p110); dc.DrawLine(pen, p010, p110);
@@ -298,16 +245,16 @@ public class IsometricCanvas : Control
     }
 
     private static void DrawBoxWireframe(DrawingContext dc, BoxPlacement box,
-        Func<double, double, double, Point> iso, Color color)
+        IsometricProjection proj, Color color)
     {
         var pen = new Pen(new SolidColorBrush(color), 1.2);
         double x = box.X, y = box.Y, z = box.Z;
         double w = box.BW, l = box.BL, h = box.BH;
 
-        var p000 = iso(x,   y,   z);   var p100 = iso(x+w, y,   z);
-        var p010 = iso(x,   y+l, z);   var p110 = iso(x+w, y+l, z);
-        var p001 = iso(x,   y,   z+h); var p101 = iso(x+w, y,   z+h);
-        var p011 = iso(x,   y+l, z+h); var p111 = iso(x+w, y+l, z+h);
+        var p000 = proj.Project(x,   y,   z);   var p100 = proj.Project(x+w, y,   z);
+        var p010 = proj.Project(x,   y+l, z);   var p110 = proj.Project(x+w, y+l, z);
+        var p001 = proj.Project(x,   y,   z+h); var p101 = proj.Project(x+w, y,   z+h);
+        var p011 = proj.Project(x,   y+l, z+h); var p111 = proj.Project(x+w, y+l, z+h);
 
         dc.DrawLine(pen, p000, p100); dc.DrawLine(pen, p100, p110);
         dc.DrawLine(pen, p110, p010); dc.DrawLine(pen, p010, p000);
@@ -318,29 +265,27 @@ public class IsometricCanvas : Control
     }
 
     private static void DrawBox(DrawingContext dc, BoxPlacement box,
-        Func<double, double, double, Point> iso, double cosAz, double sinAz,
-        Color? overrideColor = null)
+        IsometricProjection proj, Color? overrideColor = null)
     {
-        var pal = box.Rotated ? PaletteAlt : Palette;
+        var pal       = box.Rotated ? PaletteAlt : Palette;
         var baseColor = overrideColor ?? pal[box.ProductIndex % pal.Length];
+        double cosAz  = proj.CosAzimuth, sinAz = proj.SinAzimuth;
         double x = box.X, y = box.Y, z = box.Z;
         double w = box.BW, l = box.BL, h = box.BH;
 
-        var p000 = iso(x,   y,   z);   var p100 = iso(x+w, y,   z);
-        var p010 = iso(x,   y+l, z);   var p110 = iso(x+w, y+l, z);
-        var p001 = iso(x,   y,   z+h); var p101 = iso(x+w, y,   z+h);
-        var p011 = iso(x,   y+l, z+h); var p111 = iso(x+w, y+l, z+h);
+        var p000 = proj.Project(x,   y,   z);   var p100 = proj.Project(x+w, y,   z);
+        var p010 = proj.Project(x,   y+l, z);   var p110 = proj.Project(x+w, y+l, z);
+        var p001 = proj.Project(x,   y,   z+h); var p101 = proj.Project(x+w, y,   z+h);
+        var p011 = proj.Project(x,   y+l, z+h); var p111 = proj.Project(x+w, y+l, z+h);
 
-        // Solid silhouette fill first — zero see-through regardless of painter-sort ties or AA gaps.
-        // Silhouette is the 6-corner convex hull of the 3 visible faces (varies by viewer quadrant).
+        // Solid silhouette fill — prevents gaps at painter-sort ties
         Point[] sil;
-        if      (sinAz >= 0 && cosAz >= 0) sil = [p001, p101, p100, p110, p010, p011]; // +X +Y
-        else if (sinAz >= 0)               sil = [p001, p011, p111, p110, p100, p000]; // +X -Y
-        else if (cosAz >= 0)               sil = [p001, p101, p111, p110, p010, p000]; // -X +Y
-        else                               sil = [p101, p111, p011, p010, p000, p100]; // -X -Y
+        if      (sinAz >= 0 && cosAz >= 0) sil = [p001, p101, p100, p110, p010, p011];
+        else if (sinAz >= 0)               sil = [p001, p011, p111, p110, p100, p000];
+        else if (cosAz >= 0)               sil = [p001, p101, p111, p110, p010, p000];
+        else                               sil = [p101, p111, p011, p010, p000, p100];
         FillFace(dc, sil, baseColor);
 
-        // Shaded faces on top for 3-D depth
         FillFace(dc, [p001, p101, p111, p011], baseColor);
 
         if (cosAz >= 0)
@@ -354,24 +299,21 @@ public class IsometricCanvas : Control
             FillFace(dc, [p000, p010, p011, p001], Darken(baseColor, 0.40));
 
         var edge = new Pen(new SolidColorBrush(Darken(baseColor, 0.55)), 0.8);
-        // Top edges (always same)
         dc.DrawLine(edge, p001, p101); dc.DrawLine(edge, p101, p111);
         dc.DrawLine(edge, p111, p011); dc.DrawLine(edge, p011, p001);
-        // Y-side edges
         if (cosAz >= 0) { dc.DrawLine(edge, p010, p011); dc.DrawLine(edge, p110, p111); dc.DrawLine(edge, p010, p110); }
         else            { dc.DrawLine(edge, p000, p001); dc.DrawLine(edge, p100, p101); dc.DrawLine(edge, p000, p100); }
-        // X-side edges
         if (sinAz >= 0) { dc.DrawLine(edge, p100, p101); dc.DrawLine(edge, p110, p111); dc.DrawLine(edge, p100, p110); }
         else            { dc.DrawLine(edge, p000, p001); dc.DrawLine(edge, p010, p011); dc.DrawLine(edge, p000, p010); }
     }
 
     private static void DrawCutPlane(DrawingContext dc, double cW, double cL, double cutZ,
-        Func<double, double, double, Point> iso)
+        IsometricProjection proj)
     {
         var pts = new[]
         {
-            iso(0,  0,  cutZ), iso(cW, 0,  cutZ),
-            iso(cW, cL, cutZ), iso(0,  cL, cutZ)
+            proj.Project(0,  0,  cutZ), proj.Project(cW, 0,  cutZ),
+            proj.Project(cW, cL, cutZ), proj.Project(0,  cL, cutZ)
         };
         var geo = new StreamGeometry();
         using (var ctx = geo.Open())
@@ -391,43 +333,22 @@ public class IsometricCanvas : Control
         dc.DrawLine(pen, pts[3], pts[0]);
     }
 
-    private static void DrawLayerLabels(DrawingContext dc, List<BoxPlacement> clipped,
-        double cL, Func<double, double, double, Point> iso)
+    private static void DrawFloorFill(DrawingContext dc, double cW, double cL,
+        IsometricProjection proj)
     {
-        if (clipped.Count == 0) return;
-
-        var levels = new System.Collections.Generic.SortedSet<double>();
-        var layerHalfHeight = new Dictionary<double, double>();
-        foreach (var b in clipped)
+        var pts = new[]
         {
-            levels.Add(b.Z);
-            if (!layerHalfHeight.TryGetValue(b.Z, out double h) || b.BH > h * 2)
-                layerHalfHeight[b.Z] = b.BH * 0.5;
-        }
-        if (levels.Count < 2) return;
-
-        var tf    = new Typeface(SansSerif);
-        var brush = new SolidColorBrush(Color.Parse("#64748B"));
-        var tick  = new Pen(new SolidColorBrush(Color.Parse(MutedHex)), 0.8);
-
-        int n = 1;
-        Point? prev = null;
-        foreach (double z in levels)
+            proj.Project(0,  0,  0), proj.Project(cW, 0,  0),
+            proj.Project(cW, cL, 0), proj.Project(0,  cL, 0)
+        };
+        var geo = new StreamGeometry();
+        using (var ctx = geo.Open())
         {
-            double halfH = layerHalfHeight.TryGetValue(z, out double hh) ? hh : 0;
-            var p = iso(0, cL, z + halfH);
-            if (prev.HasValue && Math.Abs(prev.Value.Y - p.Y) < 10) { continue; }
-
-            var ft = new FormattedText($"ชั้นที่ {n}",
-                System.Globalization.CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight, tf, 10, brush);
-
-            dc.DrawLine(tick, p, new Point(p.X + 8, p.Y));
-            dc.DrawText(ft, new Point(p.X + 12, p.Y - ft.Height / 2));
-
-            prev = p;
-            n++;
+            ctx.BeginFigure(pts[0], true);
+            for (int i = 1; i < pts.Length; i++) ctx.LineTo(pts[i]);
+            ctx.EndFigure(true);
         }
+        dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(18, 148, 163, 184)), null, geo);
     }
 
     private static void FillFace(DrawingContext dc, Point[] pts, Color color)
@@ -440,143 +361,6 @@ public class IsometricCanvas : Control
             ctx.EndFigure(true);
         }
         dc.DrawGeometry(new SolidColorBrush(color), null, geo);
-    }
-
-    private static void DrawFloorFill(DrawingContext dc, double cW, double cL,
-        Func<double, double, double, Point> iso)
-    {
-        var pts = new[] { iso(0, 0, 0), iso(cW, 0, 0), iso(cW, cL, 0), iso(0, cL, 0) };
-        var geo = new StreamGeometry();
-        using (var ctx = geo.Open())
-        {
-            ctx.BeginFigure(pts[0], true);
-            for (int i = 1; i < pts.Length; i++) ctx.LineTo(pts[i]);
-            ctx.EndFigure(true);
-        }
-        dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(18, 148, 163, 184)), null, geo);
-    }
-
-    private void DrawStackWidthLabel(DrawingContext dc, Func<double, double, double, Point> iso)
-    {
-        if (Placements.Count == 0) return;
-
-        // One bracket per (product, stack) group on the left-bottom edge
-        var stacks = Placements
-            .GroupBy(p => (p.ProductIndex, p.StackIndex))
-            .Select(g => (startY: g.Min(p => p.Y), endY: g.Max(p => p.Y + p.BL)))
-            .OrderBy(s => s.startY)
-            .ToList();
-
-        var tf  = new Typeface(SansSerif);
-        var br  = new SolidColorBrush(Color.Parse("#475569"));
-        var pen = new Pen(br, 2.0);
-
-        foreach (var (startY, endY) in stacks)
-        {
-            var p0 = iso(0, startY, 0);
-            var p1 = iso(0, endY,   0);
-
-            // Bracket line + end ticks
-            dc.DrawLine(pen, p0, p1);
-            dc.DrawLine(pen, new Point(p0.X - 10, p0.Y), new Point(p0.X + 3, p0.Y));
-            dc.DrawLine(pen, new Point(p1.X - 10, p1.Y), new Point(p1.X + 3, p1.Y));
-
-            var ft = new FormattedText($"{(int)Math.Round(endY - startY)} ซม.",
-                System.Globalization.CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight, tf, 10, br);
-
-            var mid = new Point((p0.X + p1.X) / 2, (p0.Y + p1.Y) / 2);
-            dc.DrawText(ft, new Point(mid.X - ft.Width - 20, mid.Y - ft.Height / 2));
-        }
-    }
-
-    private static void DrawDirectionLabels(DrawingContext dc, double cW, double cL, double cH,
-        Func<double, double, double, Point> iso)
-    {
-        var tf = new Typeface(SansSerif, FontStyle.Normal, FontWeight.SemiBold);
-
-        void DrawBadge(string text, double wx, double wy, double wz, Color color)
-        {
-            var br = new SolidColorBrush(color);
-            var ft = new FormattedText(text,
-                System.Globalization.CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight, tf, 11, br);
-            var p  = iso(wx, wy, wz);
-            var bg = new Rect(p.X - ft.Width / 2 - 5, p.Y - ft.Height / 2 - 3,
-                              ft.Width + 10, ft.Height + 6);
-            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)),
-                new Pen(br, 1), bg, 4, 4);
-            dc.DrawText(ft, new Point(p.X - ft.Width / 2, p.Y - ft.Height / 2));
-        }
-
-        DrawBadge("ประตู", cW / 2, 0,   cH / 2, Color.Parse("#0EA5E9")); // outer — door
-        DrawBadge("ในสุด", cW / 2, cL,  cH / 2, Color.Parse("#F97316")); // inner — back wall
-    }
-
-    private static void DrawEdgeLabels(DrawingContext dc, double cW, double cL, double cH,
-        Func<double, double, double, Point> iso)
-    {
-        var tf    = new Typeface(SansSerif);
-        var brush = new SolidColorBrush(Color.Parse(MutedHex));
-
-        FormattedText Ft(string t) => new(t,
-            System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight, tf, 11, brush);
-
-        // Width — centered below front-bottom edge
-        var ft = Ft($"{(int)cW} ซม.");
-        var p  = iso(cW / 2, 0, 0);
-        dc.DrawText(ft, new Point(p.X - ft.Width / 2, p.Y + 8));
-
-        // Length — right of right-bottom edge midpoint
-        ft = Ft($"{(int)cL} ซม.");
-        p  = iso(cW, cL / 2, 0);
-        dc.DrawText(ft, new Point(p.X + 8, p.Y - ft.Height / 2));
-
-        // Height — right of right-front vertical edge midpoint (left side used by ชั้นที่ labels)
-        ft = Ft($"{(int)cH} ซม.");
-        p  = iso(cW, 0, cH / 2);
-        dc.DrawText(ft, new Point(p.X + 8, p.Y - ft.Height / 2));
-    }
-
-    private void DrawInfoCard(DrawingContext dc)
-    {
-        if (Container is null) return;
-        var ft = new FormattedText(
-            $"{Container.Name}  {Container.SizeLabel}",
-            System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            new Typeface(SansSerif, FontStyle.Normal, FontWeight.SemiBold),
-            13,
-            new SolidColorBrush(Color.Parse("#475569")));
-
-        double x = 14, y = 12;
-        dc.DrawRectangle(
-            new SolidColorBrush(Color.FromArgb(210, 255, 255, 255)),
-            new Pen(new SolidColorBrush(Color.Parse("#E2E8F0")), 1),
-            new Rect(x - 6, y - 5, ft.Width + 12, ft.Height + 10),
-            6, 6);
-        dc.DrawText(ft, new Point(x, y));
-    }
-
-    private static void DrawHint(DrawingContext dc, Rect bounds, string text)
-    {
-        var ft = new FormattedText(text,
-            System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            new Typeface(SansSerif), 16,
-            new SolidColorBrush(Color.Parse(MutedHex)));
-        dc.DrawText(ft, new Point((bounds.Width - ft.Width) / 2, (bounds.Height - ft.Height) / 2));
-    }
-
-    private static void DrawHint2(DrawingContext dc, Rect bounds, string text)
-    {
-        var ft = new FormattedText(text,
-            System.Globalization.CultureInfo.CurrentCulture,
-            FlowDirection.LeftToRight,
-            new Typeface(SansSerif), 12,
-            new SolidColorBrush(Color.Parse("#CBD5E1")));
-        dc.DrawText(ft, new Point((bounds.Width - ft.Width) / 2, bounds.Height / 2 + 28));
     }
 
     private static Color Darken(Color c, double t) =>

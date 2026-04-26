@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -75,9 +76,7 @@ public record ProductSpec(
 
     public static readonly List<ProductSpec> All = [];
 
-    private static readonly string FilePath = Path.Combine(AppPaths.DataDir, "products.json");
-
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private static readonly string FilePath = AppPaths.ProductsFile;
 
     public static void Load()
     {
@@ -89,17 +88,17 @@ public record ProductSpec(
         try
         {
             var json = File.ReadAllText(FilePath);
-            var specs = JsonSerializer.Deserialize<ProductSpec[]>(json, JsonOpts);
+            var specs = JsonSerializer.Deserialize<ProductSpec[]>(json, JsonOptions.WriteIndented);
             if (specs is null || specs.Length == 0) { All.AddRange(Defaults); return; }
             All.Clear();
             All.AddRange(specs);
         }
-        catch { All.AddRange(Defaults); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ProductSpec.Load] {ex}"); All.AddRange(Defaults); }
     }
 
     public static void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllText(FilePath, JsonSerializer.Serialize(All, JsonOpts));
+        File.WriteAllText(FilePath, JsonSerializer.Serialize(All, JsonOptions.WriteIndented));
     }
 }

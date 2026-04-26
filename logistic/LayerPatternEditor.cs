@@ -12,12 +12,6 @@ namespace logistic;
 // Each section contains one or more sub-rows, each with its own box orientation.
 public class LayerPatternEditor : UserControl
 {
-    private static readonly SolidColorBrush BgCard     = new(Color.Parse("#F8FAFC"));
-    private static readonly SolidColorBrush BoxNormal  = new(Color.Parse("#3B82F6"));
-    private static readonly SolidColorBrush BoxRotated = new(Color.Parse("#F97316"));
-    private static readonly SolidColorBrush CardBorder = new(Color.Parse("#E2E8F0"));
-    private static readonly SolidColorBrush LabelMuted  = new(Color.Parse("#64748B"));
-    private static readonly SolidColorBrush LabelStrong = new(Color.Parse("#1E293B"));
 
     private readonly List<SectionRow> _rows = [];
     private double _boxW;
@@ -78,7 +72,7 @@ public class LayerPatternEditor : UserControl
         _summaryLabel = new TextBlock
         {
             FontSize = 12,
-            Foreground = LabelMuted,
+            Foreground = ThemeColors.InkMuted,
             VerticalAlignment = VerticalAlignment.Center
         };
         footer.Children.Add(_summaryLabel);
@@ -211,8 +205,8 @@ public class LayerPatternEditor : UserControl
 
             return new Border
             {
-                Background      = BgCard,
-                BorderBrush     = CardBorder,
+                Background      = ThemeColors.SurfaceSub,
+                BorderBrush     = ThemeColors.BorderLight,
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(8),
                 Padding         = new Thickness(12, 10),
@@ -274,7 +268,7 @@ public class LayerPatternEditor : UserControl
                 double bl    = sub.Rotated ? _boxW : _boxL;
                 double cellW = bw * scale;
                 double cellH = bl * scale;
-                var    fill  = sub.Rotated ? BoxRotated : BoxNormal;
+                var    fill  = sub.Rotated ? ThemeColors.BoxRotated : ThemeColors.BoxNormal;
 
                 for (int r = 0; r < sub.Rows; r++)
                 {
@@ -365,7 +359,7 @@ public class LayerPatternEditor : UserControl
             {
                 Text                = text,
                 FontSize            = 12,
-                Foreground          = LabelStrong,
+                Foreground          = ThemeColors.Ink,
                 VerticalAlignment   = VerticalAlignment.Center
             };
 
