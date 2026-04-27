@@ -161,18 +161,66 @@ internal static class PackingEngine
         double condoY = condoAreaStart;
         var condoMap = new Dictionary<int,int>();
 
-        foreach (var info in packInfos)
-        {
-            if (!info.HasPattern) continue;
-            int primaryPacked = info.Result.Packed - partialRemoved.GetValueOrDefault(info.ProductIndex, 0);
-            int rem = info.Requested - primaryPacked - mixedMap.GetValueOrDefault(info.ProductIndex, 0);
-            if (rem <= 0) continue;
+        var withRem = packInfos
+            .Where(info => info.HasPattern)
+            .Select(info => {
+                int primaryPacked = info.Result.Packed - partialRemoved.GetValueOrDefault(info.ProductIndex, 0);
+                int rem = info.Requested - primaryPacked - mixedMap.GetValueOrDefault(info.ProductIndex, 0);
+                return (info, rem);
+            })
+            .Where(x => x.rem > 0)
+            .OrderByDescending(x => x.info.Spec.Cbm)
+            .ToList();
 
-            int placed = PlaceCondoStack(dims, info.Spec, rem, ref condoY,
-                                         info.ProductIndex, CondoStackBase + info.ProductIndex, placements);
+        var partials = new List<(PackInfo info, int count)>();
+
+        // Phase 1: full rows, one per Y slot, CBM desc
+        foreach (var (info, rem) in withRem)
+        {
+            int cols = CondoCols(info.Spec, dims);
+            if (cols <= 0) continue;
+
+            int fullRows = rem / cols;
+            int partial  = rem % cols;
+            if (partial > 0) partials.Add((info, partial));
+
+            int placed = 0;
+            for (int row = 0; row < fullRows; row++)
+            {
+                if (condoY + info.Spec.L > dims.L + 0.01) break;
+                for (int col = 0; col < cols; col++)
+                    placements.Add(new BoxPlacement(
+                        col * info.Spec.W, condoY, 0,
+                        info.Spec.W, info.Spec.L, info.Spec.H,
+                        info.ProductIndex, false, CondoStackBase + info.ProductIndex, 0));
+                placed += cols;
+                condoY += info.Spec.L;
+            }
             if (placed > 0) condoMap[info.ProductIndex] = placed;
         }
 
+        // Phase 2: partial rows packed side-by-side in X; new Y slot only when width overflows
+        double xOffset = 0;
+        double slotMaxL = 0;
+        foreach (var (info, count) in partials)
+        {
+            double needed = count * info.Spec.W;
+            if (xOffset > 0 && xOffset + needed > dims.W + 0.01)
+            {
+                condoY += slotMaxL;
+                xOffset = 0;
+                slotMaxL = 0;
+            }
+            if (condoY + info.Spec.L > dims.L + 0.01) break;
+            for (int col = 0; col < count; col++)
+                placements.Add(new BoxPlacement(
+                    xOffset + col * info.Spec.W, condoY, 0,
+                    info.Spec.W, info.Spec.L, info.Spec.H,
+                    info.ProductIndex, false, CondoStackBase + info.ProductIndex, 0));
+            xOffset += needed;
+            slotMaxL = Math.Max(slotMaxL, info.Spec.L);
+            condoMap[info.ProductIndex] = condoMap.GetValueOrDefault(info.ProductIndex, 0) + count;
+        }
         return condoMap;
     }
 
@@ -418,33 +466,11 @@ internal static class PackingEngine
         return placed;
     }
 
-    private static int PlaceCondoStack(
-        ContainerDims dims, ProductSpec spec, int remaining,
-        ref double condoY, int productIndex, int condoStackIndex,
-        List<BoxPlacement> placements)
+    private static int CondoCols(ProductSpec spec, ContainerDims dims)
     {
-        if (remaining <= 0) return 0;
-
         int condoCount = spec.CondoCount > 0
             ? spec.CondoCount
             : (int)Math.Floor(dims.W / spec.W);
-        int maxLayers = CalcLayerLimit(spec, dims);
-        if (condoCount <= 0 || maxLayers <= 0 || condoY + spec.L > dims.L + 0.01) return 0;
-
-        int cols   = Math.Min(condoCount, (int)Math.Floor(dims.W / spec.W));
-        int placed = 0;
-        for (int layer = 0; layer < maxLayers && placed < remaining; layer++)
-        {
-            for (int col = 0; col < cols && placed < remaining; col++)
-            {
-                placements.Add(new BoxPlacement(
-                    col * spec.W, condoY, layer * spec.H, spec.W, spec.L, spec.H,
-                    productIndex, false, condoStackIndex, layer));
-                placed++;
-            }
-        }
-
-        if (placed > 0) condoY += spec.L;
-        return placed;
+        return Math.Min(condoCount, (int)Math.Floor(dims.W / spec.W));
     }
 }
