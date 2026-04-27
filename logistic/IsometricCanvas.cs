@@ -135,9 +135,9 @@ public class IsometricCanvas : Control
             return;
         }
 
-        double cW = Container.InteriorW;
-        double cL = Container.InteriorL;
-        double cH = Container.InteriorH;
+        double cW = Container.NominalW;
+        double cL = Container.NominalL;
+        double cH = Container.NominalH;
 
         var proj  = new IsometricProjection(_cam.Azimuth, _cam.Elevation, _cam.Zoom,
                                              cW, cL, cH, bounds.Width, bounds.Height);
@@ -176,6 +176,15 @@ public class IsometricCanvas : Control
             return da.CompareTo(db);
         });
 
+        // Shift boxes by Gap/2 so the gap is split evenly between both walls on each axis
+        double gapHalf = Container.Gap / 2.0;
+        if (gapHalf > 0.001)
+            for (int i = 0; i < clipped.Count; i++)
+            {
+                var b = clipped[i];
+                clipped[i] = b with { X = b.X + gapHalf, Y = b.Y + gapHalf };
+            }
+
         Dictionary<double, int>? zLayerMap = null;
         if (_colorByLayer)
         {
@@ -205,7 +214,10 @@ public class IsometricCanvas : Control
         if (_showDimensions)
         {
             CanvasLabelRenderer.DrawEdgeLabels(context, cW, cL, cH, proj);
-            CanvasLabelRenderer.DrawStackWidthLabel(context, Placements, proj);
+            var labPlacements = gapHalf > 0.001
+                ? Placements.Select(p => p with { Y = p.Y + gapHalf }).ToList()
+                : (IReadOnlyList<BoxPlacement>)Placements;
+            CanvasLabelRenderer.DrawStackWidthLabel(context, labPlacements, proj);
         }
 
         if (_cutRatio < 0.999 && clipped.Count > 0)
