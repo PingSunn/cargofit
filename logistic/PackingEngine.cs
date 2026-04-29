@@ -38,8 +38,9 @@ internal static class PackingEngine
         var dims = new ContainerDims(container.InteriorW, container.InteriorL, container.InteriorH);
         var placements = new List<BoxPlacement>();
 
-        var packInfos = RunPrimaryPacking(dims, requests, placements, out double currentY);
-        RunBalancing(packInfos, dims, placements, ref currentY);
+        var effectiveLayers = ComputeEffectiveLayers(dims, requests);
+        var packInfos = RunPrimaryPacking(dims, requests, placements, out double currentY, effectiveLayers);
+        RunBalancing(packInfos, dims, placements, ref currentY, effectiveLayers);
         RunPartialRemoval(packInfos, dims, placements, ref currentY);
         var condoMap  = RunCondoPlacement(packInfos, dims, currentY, placements);
 
@@ -48,7 +49,7 @@ internal static class PackingEngine
 
     private static List<PackInfo> RunPrimaryPacking(
         ContainerDims dims, IReadOnlyList<(ProductSpec Spec, int Qty)> requests,
-        List<BoxPlacement> placements, out double currentY)
+        List<BoxPlacement> placements, out double currentY, int[] effectiveLayers)
     {
         var packInfos = new List<PackInfo>();
         currentY = 0;
@@ -62,7 +63,8 @@ internal static class PackingEngine
             PlaceResult r;
             if (hasPattern)
             {
-                r = PlaceProduct(dims, spec, requested, currentY, i, placements);
+                r = PlaceProduct(dims, spec, requested, currentY, i, placements,
+                                 overrideMaxLayers: effectiveLayers[i]);
                 currentY = r.EndY;
             }
             else
@@ -77,7 +79,7 @@ internal static class PackingEngine
 
     private static void RunBalancing(
         List<PackInfo> packInfos, ContainerDims dims,
-        List<BoxPlacement> placements, ref double currentY)
+        List<BoxPlacement> placements, ref double currentY, int[] effectiveLayers)
     {
         // ── Step A: Fill free Y with more primary stacks ──────────────────────
         // Leave 50 cm for condo/mixed; keep adding stacks while space remains.
@@ -110,7 +112,8 @@ internal static class PackingEngine
                     .Max() + 1;
 
                 var r = PlaceProduct(fillDims, info.Spec, rem, currentY,
-                                     info.ProductIndex, placements, nextSI);
+                                     info.ProductIndex, placements, nextSI,
+                                     overrideMaxLayers: effectiveLayers[info.ProductIndex]);
                 if (r.Packed > 0)
                 {
                     currentY = Math.Max(currentY, r.EndY);
@@ -127,13 +130,13 @@ internal static class PackingEngine
 
         if (active.Count > 0)
         {
-            double globalTargetH = active.Average(info => CalcLayerLimit(info.Spec, dims) * info.Spec.H);
+            double globalTargetH = active.Average(info => effectiveLayers[info.ProductIndex] * info.Spec.H);
 
             foreach (var info in active)
             {
                 int targetLayers = Math.Min(
                     (int)Math.Floor(globalTargetH / info.Spec.H + 1e-9),
-                    CalcLayerLimit(info.Spec, dims));
+                    effectiveLayers[info.ProductIndex]);
                 if (targetLayers <= 0) continue;
 
                 var stackIndices = placements
@@ -143,8 +146,11 @@ internal static class PackingEngine
                 int primaryPacked = placements.Count(p =>
                     p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase);
 
+                bool topOff = false;
                 foreach (int si in stackIndices)
                 {
+                    if (topOff) break;
+
                     int current = placements
                         .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex == si)
                         .Select(p => p.LayerIndex).DefaultIfEmpty(-1).Max() + 1;
@@ -179,11 +185,15 @@ internal static class PackingEngine
 
                             int capacity = CountLayerCapacity(sections, info.Spec, dims, stackY);
                             if (capacity <= 0) break;
-                            if (info.Requested - primaryPacked < capacity) break;
 
-                            PlaceLayerAt(sections, info.Spec, dims, stackY, z, capacity,
+                            int toPlace = info.Requested - primaryPacked;
+                            if (toPlace <= 0) { topOff = true; break; }
+                            if (toPlace < capacity) topOff = true; // partial last-batch fill
+
+                            PlaceLayerAt(sections, info.Spec, dims, stackY, z, Math.Min(toPlace, capacity),
                                          info.ProductIndex, placements, si, layer);
-                            primaryPacked += capacity;
+                            primaryPacked += Math.Min(toPlace, capacity);
+                            if (topOff) break;
                         }
                     }
                 }
@@ -223,6 +233,15 @@ internal static class PackingEngine
         }
 
         currentY = placements.Count > 0 ? placements.Max(p => p.Y + p.BL) + 0.1 : 0;
+
+        for (int i = 0; i < packInfos.Count; i++)
+        {
+            var info = packInfos[i];
+            if (!info.HasPattern) continue;
+            int actual = placements.Count(p =>
+                p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase);
+            packInfos[i] = info with { Result = info.Result with { Packed = actual } };
+        }
     }
 
     private static Dictionary<int,int> RunCondoPlacement(
@@ -346,14 +365,16 @@ internal static class PackingEngine
     private static PlaceResult PlaceProduct(
         ContainerDims dims, ProductSpec spec, int requested,
         double startY, int productIndex, List<BoxPlacement> placements,
-        int initialStackIndex = 0)
+        int initialStackIndex = 0, int overrideMaxLayers = 0)
     {
         if (spec.PatternA is not { Length: > 0 }) return new(0, startY, 0, 0);
 
         double stackDepth = LayerDepth(spec.PatternA, spec.W, spec.L);
         if (stackDepth <= 0) return new(0, startY, 0, 0);
 
-        int maxLayers   = spec.MaxLayers > 0 ? spec.MaxLayers : int.MaxValue;
+        int maxLayers   = overrideMaxLayers > 0
+            ? overrideMaxLayers
+            : (spec.MaxLayers > 0 ? spec.MaxLayers : int.MaxValue);
         int maxHeight   = (int)Math.Floor(dims.H / spec.H);
         int layerLimit  = Math.Min(maxLayers, maxHeight);
 
@@ -447,6 +468,44 @@ internal static class PackingEngine
         }
 
         return packed > 0 ? packed : -1;
+    }
+
+    private static int[] ComputeEffectiveLayers(
+        ContainerDims dims, IReadOnlyList<(ProductSpec Spec, int Qty)> requests)
+    {
+        int n   = requests.Count;
+        var eff  = new int[n];
+        var data = new (int bpl, double sd, int stacks)[n];
+
+        for (int i = 0; i < n; i++)
+        {
+            var (spec, qty) = requests[i];
+            int maxL = spec.MaxLayers > 0 ? spec.MaxLayers : (int)Math.Floor(dims.H / spec.H);
+            eff[i] = maxL;
+            if (spec.PatternA is not { Length: > 0 }) continue;
+
+            double sd  = LayerDepth(spec.PatternA, spec.W, spec.L);
+            int    bpl = CountLayerCapacity(spec.PatternA, spec, dims, 0);
+            if (sd <= 0 || bpl <= 0) continue;
+
+            int stacks = (int)Math.Ceiling((double)qty / (bpl * maxL));
+            data[i] = (bpl, sd, stacks);
+        }
+
+        double totalY  = data.Sum(d => d.stacks * d.sd);
+        double targetY = dims.L - 50.0;
+        if (totalY <= 0 || totalY >= targetY) return eff;
+
+        double scale = targetY / totalY;
+        for (int i = 0; i < n; i++)
+        {
+            var (bpl, sd, stacks) = data[i];
+            if (bpl <= 0 || sd <= 0 || stacks <= 0) continue;
+            int newStacks = (int)Math.Ceiling(stacks * scale);
+            int newL      = (int)Math.Ceiling((double)requests[i].Qty / (newStacks * bpl));
+            eff[i] = Math.Max(1, Math.Min(newL, eff[i]));
+        }
+        return eff;
     }
 
     private static int CalcLayerLimit(ProductSpec spec, ContainerDims dims) =>
