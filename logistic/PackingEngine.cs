@@ -257,15 +257,23 @@ internal static class PackingEngine
         int basePI   = baseInfo.ProductIndex;
         int baseCols = colsMap[basePI];
 
+        // Uniform column depth = max L across all products (ensures no Y overlaps).
+        double colDepth = withRem.Max(x => x.info.Spec.L);
+
         double condoY = condoAreaStart;
         double z      = 0.0;
 
-        // Phase 1: stack complete rows of base product vertically at condoY.
+        // Phase 1: stack complete rows of base product vertically.
+        // When Z column fills up, advance to next Y column.
         int placed1 = 0;
-        while (baseCols > 0 && placed1 + baseCols <= baseRem &&
-               z + baseInfo.Spec.H <= dims.H + 0.01 &&
-               condoY + baseInfo.Spec.L <= dims.L + 0.01)
+        while (baseCols > 0 && placed1 + baseCols <= baseRem && condoY + colDepth <= dims.L + 0.01)
         {
+            if (z + baseInfo.Spec.H > dims.H + 0.01)
+            {
+                condoY += colDepth;
+                z       = 0.0;
+                if (condoY + colDepth > dims.L + 0.01) break;
+            }
             for (int col = 0; col < baseCols; col++)
                 placements.Add(new BoxPlacement(
                     col * baseInfo.Spec.W, condoY, z,
@@ -276,8 +284,11 @@ internal static class PackingEngine
             z       += baseInfo.Spec.H;
         }
 
-        // Phase 2: all incomplete amounts continue the same vertical column.
-        // Order: base product partial first (heaviest/tallest), then secondary products.
+        // Phase 2: incomplete amounts — side-by-side in X at current Z level.
+        // Advance Z when X is full; advance Y column when Z is full.
+        double xCursor = 0.0;
+        double levelH  = 0.0;
+
         foreach (var (info, rem) in withRem)
         {
             int cols      = colsMap[info.ProductIndex];
@@ -285,19 +296,40 @@ internal static class PackingEngine
             if (cols <= 0 || remaining <= 0) continue;
 
             int condoSI = CondoStackBase + info.ProductIndex;
-            while (remaining > 0 &&
-                   z + info.Spec.H <= dims.H + 0.01 &&
-                   condoY + info.Spec.L <= dims.L + 0.01)
+
+            while (remaining > 0 && condoY + colDepth <= dims.L + 0.01)
             {
-                int toPlace = Math.Min(cols, remaining);
+                int    toPlace = Math.Min(cols, remaining);
+                double neededX = toPlace * info.Spec.W;
+
+                // No room in X → advance Z level.
+                if (xCursor + neededX > dims.W + 0.01)
+                {
+                    z      += levelH;
+                    xCursor = 0.0;
+                    levelH  = 0.0;
+                }
+
+                // Z column full → advance Y column.
+                if (z + info.Spec.H > dims.H + 0.01)
+                {
+                    condoY += colDepth;
+                    z       = 0.0;
+                    xCursor = 0.0;
+                    levelH  = 0.0;
+                    if (condoY + colDepth > dims.L + 0.01) break;
+                }
+
                 for (int col = 0; col < toPlace; col++)
                     placements.Add(new BoxPlacement(
-                        col * info.Spec.W, condoY, z,
+                        xCursor + col * info.Spec.W, condoY, z,
                         info.Spec.W, info.Spec.L, info.Spec.H,
                         info.ProductIndex, false, condoSI, 0));
+
                 condoMap[info.ProductIndex] = condoMap.GetValueOrDefault(info.ProductIndex) + toPlace;
                 remaining -= toPlace;
-                z         += info.Spec.H;
+                xCursor   += neededX;
+                levelH     = Math.Max(levelH, info.Spec.H);
             }
         }
 
