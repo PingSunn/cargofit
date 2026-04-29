@@ -43,7 +43,7 @@ internal static class PackingEngine
         RunBalancing(packInfos, dims, placements, ref currentY, effectiveLayers);
         RunLayerBalancing(packInfos, dims, placements);
         RunPartialRemoval(packInfos, dims, placements, ref currentY);
-        SortStacksByHeight(packInfos, placements);
+        SortStacksByHeight(packInfos, placements, dims);
         var condoMap  = RunCondoPlacement(packInfos, dims, currentY, placements);
 
         return new PackingOutput(placements, packInfos, new Dictionary<int,int>(), condoMap);
@@ -106,6 +106,10 @@ internal static class PackingEngine
             foreach (var (info, rem) in withRem)
             {
                 if (fillDims.L - currentY <= 0) break;
+
+                // Skip if the next stack position has reduced capacity (truncated pattern at container edge).
+                int fullBpl = CountLayerCapacity(info.Spec.PatternA!, info.Spec, fillDims, info.StartY);
+                if (CountLayerCapacity(info.Spec.PatternA!, info.Spec, fillDims, currentY) < fullBpl) continue;
 
                 int nextSI = placements
                     .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase)
@@ -496,32 +500,44 @@ internal static class PackingEngine
         int activeCount = data.Count(d => d.bpl > 0 && d.sd > 0 && d.stacks > 0);
         if (activeCount >= 2)
         {
+            // Full layers placeable per product (floor: only complete layers count).
             var totalLayers = new int[n];
             for (int i = 0; i < n; i++)
                 if (data[i].bpl > 0)
-                    totalLayers[i] = (int)Math.Ceiling((double)requests[i].Qty / data[i].bpl);
+                    totalLayers[i] = requests[i].Qty / data[i].bpl;
 
-            int maxT = eff.Max();
-            for (int T = maxT; T >= 1; T--)
+            // Snap points = integer multiples of each product's physical height.
+            // Iterating ascending finds the smallest T_h where requiredY ≤ targetY,
+            // maximising Y fill while keeping all stack heights near the same physical target.
+            var snapSet = new SortedSet<double>();
+            for (int i = 0; i < n; i++)
             {
-                bool feasible = true;
+                if (data[i].bpl <= 0 || data[i].sd <= 0 || totalLayers[i] <= 0) continue;
+                double h = requests[i].Spec.H;
+                for (int k = 1; k <= eff[i]; k++)
+                    snapSet.Add(Math.Round(k * h, 4));
+            }
+
+            foreach (double Th in snapSet)
+            {
                 double requiredY = 0;
+                var trialEff = new int[n];
                 for (int i = 0; i < n; i++)
                 {
-                    if (data[i].bpl <= 0 || data[i].sd <= 0) continue;
-                    if (T > eff[i]) { feasible = false; break; }
-                    int nMin = (int)Math.Ceiling((double)totalLayers[i] / (T + 1));
-                    int nMax = (int)Math.Floor((double)totalLayers[i] / T);
-                    if (nMin > nMax) { feasible = false; break; }
-                    requiredY += nMin * data[i].sd;
+                    trialEff[i] = eff[i];
+                    if (data[i].bpl <= 0 || data[i].sd <= 0 || totalLayers[i] <= 0) continue;
+                    int ei = Math.Max(1, Math.Min(eff[i],
+                        (int)Math.Floor(Th / requests[i].Spec.H)));
+                    trialEff[i] = ei;
+                    requiredY  += (int)Math.Ceiling((double)totalLayers[i] / ei) * data[i].sd;
                 }
-                if (feasible && requiredY <= targetY)
+                if (requiredY <= targetY)
                 {
-                    for (int i = 0; i < n; i++)
-                        if (data[i].bpl > 0) eff[i] = Math.Min(T + 1, eff[i]);
+                    Array.Copy(trialEff, eff, n);
                     return eff;
                 }
             }
+
             return eff;
         }
 
@@ -609,7 +625,7 @@ internal static class PackingEngine
 
 
     private static void SortStacksByHeight(
-        List<PackInfo> packInfos, List<BoxPlacement> placements)
+        List<PackInfo> packInfos, List<BoxPlacement> placements, ContainerDims dims)
     {
         foreach (var info in packInfos)
         {
@@ -624,14 +640,26 @@ internal static class PackingEngine
 
             if (stacks.Count < 2) continue;
 
-            var ySlots = stacks.Select(x => x.MinY).ToList();
-            var sorted = stacks.OrderBy(x => x.Height).ToList(); // short → tall (tall goes to highest Y = inner)
+            var ySlots  = stacks.Select(x => x.MinY).ToList();
+            var caps    = ySlots.Select(y => CountLayerCapacity(info.Spec.PatternA!, info.Spec, dims, y)).ToList();
+            var sorted  = stacks.OrderBy(x => x.Height).ToList(); // short → tall (tall goes to highest Y)
 
             if (stacks.Select(x => x.SI).SequenceEqual(sorted.Select(x => x.SI))) continue;
 
+            // Only remap when every stack lands at a slot with the same layer capacity.
             var remapY = new Dictionary<int, double>();
             for (int i = 0; i < sorted.Count; i++)
-                remapY[sorted[i].SI] = ySlots[i];
+            {
+                int srcSI   = sorted[i].SI;
+                double newY = ySlots[i];
+                double oldY = stacks.First(x => x.SI == srcSI).MinY;
+                int oldCap  = CountLayerCapacity(info.Spec.PatternA!, info.Spec, dims, oldY);
+                if (caps[i] != oldCap) continue;
+                if (Math.Abs(newY - oldY) > 0.001)
+                    remapY[srcSI] = newY;
+            }
+
+            if (remapY.Count == 0) continue;
 
             for (int j = 0; j < placements.Count; j++)
             {
