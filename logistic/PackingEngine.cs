@@ -244,11 +244,11 @@ internal static class PackingEngine
     {
         var condoMap = new Dictionary<int,int>();
 
-        // Sort H descending: tallest product is the base (placed first, lowest Z).
         var withRem = packInfos
             .Where(info => info.HasPattern && info.Requested - info.Result.Packed > 0)
             .Select(info => (info, rem: info.Requested - info.Result.Packed))
-            .OrderByDescending(x => x.info.Spec.H)
+            .OrderByDescending(x => ParseContentValue(x.info.Spec.Content))
+            .ThenByDescending(x => x.info.Spec.H)
             .ToList();
 
         if (withRem.Count == 0) return condoMap;
@@ -257,84 +257,62 @@ internal static class PackingEngine
         foreach (var (info, _) in withRem)
             colsMap[info.ProductIndex] = CondoCols(info.Spec, dims);
 
-        var (baseInfo, baseRem) = withRem[0];
-        int basePI   = baseInfo.ProductIndex;
-        int baseCols = colsMap[basePI];
-
-        // Uniform column depth = max L across all products (ensures no Y overlaps).
         double colDepth = withRem.Max(x => x.info.Spec.L);
+        double condoY   = condoAreaStart;
+        double z        = 0.0;
 
-        double condoY = condoAreaStart;
-        double z      = 0.0;
+        bool HasY() => condoY + colDepth <= dims.L + 0.01;
+        void NextColumn() { condoY += colDepth; z = 0.0; }
 
-        // Phase 1: stack complete rows of base product vertically.
-        // When Z column fills up, advance to next Y column.
-        int placed1 = 0;
-        while (baseCols > 0 && placed1 + baseCols <= baseRem && condoY + colDepth <= dims.L + 0.01)
+        // Phase 1: all full rows (condoCols wide) for every product, tallest-first.
+        foreach (var (info, rem) in withRem)
         {
-            if (z + baseInfo.Spec.H > dims.H + 0.01)
+            int cols     = colsMap[info.ProductIndex];
+            int fullRows = cols > 0 ? rem / cols : 0;
+            int condoSI  = CondoStackBase + info.ProductIndex;
+
+            for (int r = 0; r < fullRows; r++)
             {
-                condoY += colDepth;
-                z       = 0.0;
-                if (condoY + colDepth > dims.L + 0.01) break;
+                if (!HasY()) break;
+                if (z + info.Spec.H > dims.H + 0.01) { NextColumn(); if (!HasY()) break; }
+
+                for (int col = 0; col < cols; col++)
+                    placements.Add(new BoxPlacement(
+                        col * info.Spec.W, condoY, z,
+                        info.Spec.W, info.Spec.L, info.Spec.H,
+                        info.ProductIndex, false, condoSI, 0));
+
+                condoMap[info.ProductIndex] = condoMap.GetValueOrDefault(info.ProductIndex) + cols;
+                z += info.Spec.H;
             }
-            for (int col = 0; col < baseCols; col++)
-                placements.Add(new BoxPlacement(
-                    col * baseInfo.Spec.W, condoY, z,
-                    baseInfo.Spec.W, baseInfo.Spec.L, baseInfo.Spec.H,
-                    basePI, false, CondoStackBase + basePI, 0));
-            condoMap[basePI] = condoMap.GetValueOrDefault(basePI) + baseCols;
-            placed1 += baseCols;
-            z       += baseInfo.Spec.H;
         }
 
-        // Phase 2: incomplete amounts — side-by-side in X at current Z level.
-        // Advance Z when X is full; advance Y column when Z is full.
+        // Phase 2: partial rows (rem % cols) for every product, packed side-by-side in X.
         double xCursor = 0.0;
         double levelH  = 0.0;
 
         foreach (var (info, rem) in withRem)
         {
-            int cols      = colsMap[info.ProductIndex];
-            int remaining = rem - (info.ProductIndex == basePI ? placed1 : 0);
-            if (cols <= 0 || remaining <= 0) continue;
+            int cols    = colsMap[info.ProductIndex];
+            int partial = cols > 0 ? rem % cols : rem;
+            if (partial <= 0) continue;
 
-            int condoSI = CondoStackBase + info.ProductIndex;
+            int    condoSI = CondoStackBase + info.ProductIndex;
+            double neededX = partial * info.Spec.W;
 
-            while (remaining > 0 && condoY + colDepth <= dims.L + 0.01)
-            {
-                int    toPlace = Math.Min(cols, remaining);
-                double neededX = toPlace * info.Spec.W;
+            if (!HasY()) break;
+            if (xCursor + neededX > dims.W + 0.01) { z += levelH; xCursor = 0.0; levelH = 0.0; }
+            if (z + info.Spec.H > dims.H + 0.01)   { NextColumn(); xCursor = 0.0; levelH = 0.0; if (!HasY()) continue; }
 
-                // No room in X → advance Z level.
-                if (xCursor + neededX > dims.W + 0.01)
-                {
-                    z      += levelH;
-                    xCursor = 0.0;
-                    levelH  = 0.0;
-                }
+            for (int col = 0; col < partial; col++)
+                placements.Add(new BoxPlacement(
+                    xCursor + col * info.Spec.W, condoY, z,
+                    info.Spec.W, info.Spec.L, info.Spec.H,
+                    info.ProductIndex, false, condoSI, 0));
 
-                // Z column full → advance Y column.
-                if (z + info.Spec.H > dims.H + 0.01)
-                {
-                    condoY += colDepth;
-                    z       = 0.0;
-                    xCursor = 0.0;
-                    levelH  = 0.0;
-                    if (condoY + colDepth > dims.L + 0.01) break;
-                }
-
-                for (int col = 0; col < toPlace; col++)
-                    placements.Add(new BoxPlacement(
-                        xCursor + col * info.Spec.W, condoY, z,
-                        info.Spec.W, info.Spec.L, info.Spec.H,
-                        info.ProductIndex, false, condoSI, 0));
-
-                condoMap[info.ProductIndex] = condoMap.GetValueOrDefault(info.ProductIndex) + toPlace;
-                remaining -= toPlace;
-                xCursor   += neededX;
-                levelH     = Math.Max(levelH, info.Spec.H);
-            }
+            condoMap[info.ProductIndex] = condoMap.GetValueOrDefault(info.ProductIndex) + partial;
+            xCursor += neededX;
+            levelH   = Math.Max(levelH, info.Spec.H);
         }
 
         return condoMap;
@@ -670,6 +648,16 @@ internal static class PackingEngine
                 placements[j] = p with { Y = newMinY + (p.Y - oldMinY) };
             }
         }
+    }
+
+    // Returns a sortable magnitude from content strings like "1000 ML", "450 ML", "150 G", "19.5 G".
+    // ML and G share the same numeric scale in this product catalog (G values are 19–150,
+    // ML values are 150–1000), so raw numeric comparison produces the correct condo order.
+    private static double ParseContentValue(string content)
+    {
+        var parts = content.TrimStart().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || !double.TryParse(parts[0], out double v)) return 0;
+        return v;
     }
 
     private static int CondoCols(ProductSpec spec, ContainerDims dims)
