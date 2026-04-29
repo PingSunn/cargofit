@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -54,6 +56,8 @@ public class PlanningView : UserControl
 
         if (ContainerSpec.All.Count > 0)
             _canvas.SetData(ContainerSpec.All[0], []);
+
+        ApplyDevPreset();
     }
 
     // ── Left panel ───────────────────────────────────────────────────────────
@@ -757,4 +761,44 @@ public class PlanningView : UserControl
         }
     }
 
+    // ── Dev preset ──────────────────────────────────────────────────────────
+    // If devpreset.json exists at repo root, auto-select container + products on startup.
+    // Format: { "container": 0, "products": [ { "index": 0, "qty": 10 } ] }
+
+    private void ApplyDevPreset()
+    {
+        var path = Path.Combine(AppPaths.DataDir, "devpreset.json");
+        if (!File.Exists(path)) return;
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var preset = JsonSerializer.Deserialize<DevPreset>(json, opts);
+            if (preset is null) return;
+
+            if (preset.Container >= 0 && preset.Container < ContainerSpec.All.Count)
+                SelectContainer(preset.Container);
+
+            foreach (var entry in preset.Products ?? [])
+            {
+                if (entry.Index < 0 || entry.Index >= _products.Count) continue;
+                var (cb, spec, _) = _products[entry.Index];
+                cb.IsChecked = true;
+                UpdateQuantitySection();
+                if (_qtyMap.TryGetValue(spec, out var row))
+                    row.QtyBox.Text = entry.Qty.ToString();
+            }
+
+            if (preset.Calculate)
+                Calculate_Click(null, null!);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[devpreset] {ex.Message}");
+        }
+    }
+
+    private sealed record DevPreset(int Container = 0, DevPresetProduct[]? Products = null, bool Calculate = true);
+    private sealed record DevPresetProduct(int Index = 0, int Qty = 1);
 }
