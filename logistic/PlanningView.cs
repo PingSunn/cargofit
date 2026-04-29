@@ -402,16 +402,33 @@ public class PlanningView : UserControl
             Margin = new Thickness(0, 0, 6, 0)
         });
 
-        // Product name
-        var nameText = new TextBlock
+        // Product name + PackSize badge inline
+        var nameRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Spacing = 5
+        };
+        nameRow.Children.Add(new TextBlock
         {
             Text = $"{spec.Description} {spec.Content}",
             FontSize = 12, FontWeight = FontWeight.Medium,
             Foreground = Ink, VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis
+        });
+        var packBadge = new Border
+        {
+            Background = SurfaceSub,
+            BorderBrush = BorderLight,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(5, 1),
+            VerticalAlignment = VerticalAlignment.Center
         };
-        Grid.SetColumn(nameText, 1);
-        grid.Children.Add(nameText);
+        packBadge.Child = new TextBlock { Text = spec.PackSize, FontSize = 10, Foreground = InkMuted };
+        nameRow.Children.Add(packBadge);
+        Grid.SetColumn(nameRow, 1);
+        grid.Children.Add(nameRow);
 
         // Stats badges
         var badges = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(8, 0) };
@@ -619,14 +636,22 @@ public class PlanningView : UserControl
     {
         var grid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,8,62,8,Auto") };
 
-        grid.Children.Add(new TextBlock
+        var nameStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        nameStack.Children.Add(new TextBlock
         {
             Text = $"{spec.Description} {spec.Content}",
             FontSize = 12,
             Foreground = Ink,
-            VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis
         });
+        nameStack.Children.Add(new TextBlock
+        {
+            Text = spec.PackSize,
+            FontSize = 10,
+            Foreground = InkMuted,
+            Margin = new Thickness(0, 2, 0, 0)
+        });
+        grid.Children.Add(nameStack);
 
         var qty = new TextBox
         {
