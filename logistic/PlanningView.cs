@@ -37,6 +37,11 @@ public class PlanningView : UserControl
     private readonly HashSet<int> _hiddenProducts = [];
     private Slider _cutSlider = null!;
     private TextBlock _cutLabel = null!;
+    private Button _exportPdfBtn = null!;
+
+    private PackingOutput? _lastOutput;
+    private IReadOnlyList<(ProductSpec Spec, int Qty)>? _lastRequests;
+    private ContainerSpec? _lastContainer;
 
     public PlanningView()
     {
@@ -213,6 +218,7 @@ public class PlanningView : UserControl
         var rootGrid = new Grid();
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Star));
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
         var inner = new StackPanel { Spacing = 4 };
 
@@ -329,6 +335,20 @@ public class PlanningView : UserControl
         startBtn.Click += Calculate_Click;
         Grid.SetRow(startBtn, 1);
         rootGrid.Children.Add(startBtn);
+
+        _exportPdfBtn = new Button
+        {
+            Content = "พิมพ์ PDF",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            FontSize = 13,
+            IsEnabled = false,
+            Margin = new Thickness(0, 6, 0, 0),
+            Padding = new Thickness(0, 9)
+        };
+        _exportPdfBtn.Click += ExportPdf_Click;
+        Grid.SetRow(_exportPdfBtn, 2);
+        rootGrid.Children.Add(_exportPdfBtn);
 
         panel.Child = rootGrid;
         return panel;
@@ -759,6 +779,11 @@ public class PlanningView : UserControl
 
         BuildPackStats(output, container);
 
+        _lastOutput    = output;
+        _lastRequests  = requests;
+        _lastContainer = container;
+        _exportPdfBtn.IsEnabled = true;
+
         _cutSlider.Value = 1.0;
         _cutLabel.Text = "100%";
         _canvas.SetData(container, output.Placements);
@@ -796,6 +821,80 @@ public class PlanningView : UserControl
                 FontSize = 12, Foreground = InkMuted
             });
         }
+    }
+
+    // ── PDF export ──────────────────────────────────────────────────────────
+
+    private async void ExportPdf_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_lastOutput is null || _lastRequests is null || _lastContainer is null) return;
+
+        var file = await TopLevel.GetTopLevel(this)!.StorageProvider.SaveFilePickerAsync(
+            new Avalonia.Platform.Storage.FilePickerSaveOptions
+            {
+                Title             = "บันทึก PDF",
+                DefaultExtension  = "pdf",
+                SuggestedFileName = $"จัดเรียง_{DateTime.Now:yyyyMMdd_HHmm}.pdf",
+                FileTypeChoices   =
+                [
+                    new Avalonia.Platform.Storage.FilePickerFileType("PDF") { Patterns = ["*.pdf"] }
+                ]
+            });
+
+        if (file is null) return;
+
+        _exportPdfBtn.IsEnabled = false;
+        try
+        {
+            byte[] bytes = await System.Threading.Tasks.Task.Run(() =>
+                PdfExporter.Generate(_lastContainer!, _lastRequests!, _lastOutput!));
+            await using var stream = await file.OpenWriteAsync();
+            await stream.WriteAsync(bytes);
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync(ex.Message);
+        }
+        finally
+        {
+            _exportPdfBtn.IsEnabled = true;
+        }
+    }
+
+    private async System.Threading.Tasks.Task ShowErrorAsync(string message)
+    {
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (owner is null) return;
+        var btn = new Button
+        {
+            Content                     = "ตกลง",
+            HorizontalAlignment         = Avalonia.Layout.HorizontalAlignment.Center,
+            Margin                      = new Thickness(0, 12, 0, 0),
+            Padding                     = new Thickness(24, 6),
+        };
+        var dlg = new Window
+        {
+            Title                   = "เกิดข้อผิดพลาด",
+            Width                   = 440,
+            CanResize               = false,
+            WindowStartupLocation   = WindowStartupLocation.CenterOwner,
+            Content                 = new StackPanel
+            {
+                Margin   = new Thickness(20),
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text        = message,
+                        TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                        MaxWidth    = 400,
+                    },
+                    btn,
+                },
+            },
+        };
+        btn.Click += (_, _) => dlg.Close();
+        await dlg.ShowDialog(owner);
     }
 
     // ── Dev preset ──────────────────────────────────────────────────────────
