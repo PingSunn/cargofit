@@ -35,8 +35,6 @@ public class PlanningView : UserControl
     private IsometricCanvas _canvas = null!;
     private StackPanel _statsPanel = null!;
     private readonly HashSet<int> _hiddenProducts = [];
-    private Slider _cutSlider = null!;
-    private TextBlock _cutLabel = null!;
     private Button _exportPdfBtn = null!;
 
     private PackingOutput? _lastOutput;
@@ -90,13 +88,13 @@ public class PlanningView : UserControl
         statsCard.Child = new ScrollViewer
         {
             Content = _statsPanel,
-            MaxHeight = 210,
+            MaxHeight = 340,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto
         };
         dock.Children.Add(statsCard);
 
         // Canvas config bar — docked above stats
-        var sliderRow = new Border
+        var chipBar = new Border
         {
             Background = Surface,
             BorderBrush = BorderLight,
@@ -105,14 +103,12 @@ public class PlanningView : UserControl
             Padding = new Thickness(10, 6),
             Margin = new Thickness(0, 8, 0, 0)
         };
-        DockPanel.SetDock(sliderRow, Dock.Bottom);
+        DockPanel.SetDock(chipBar, Dock.Bottom);
 
-        // Chip buttons row
         var chipRow = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 5,
-            Margin = new Thickness(0, 0, 0, 6)
+            Spacing = 5
         };
 
         var resetBtn = new Button
@@ -134,53 +130,8 @@ public class PlanningView : UserControl
         chipRow.Children.Add(MakeChip("สีสลับชั้น", false, v => _canvas.SetColorByStackLayer(v)));
         chipRow.Children.Add(MakeChip("แสดงขนาด",  true,  v => _canvas.SetShowDimensions(v)));
 
-        var sliderGrid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("Auto,*,38") };
-
-        sliderGrid.Children.Add(new TextBlock
-        {
-            Text = "แสดงชั้น",
-            FontSize = 11,
-            FontWeight = FontWeight.Medium,
-            Foreground = InkMuted,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 10, 0)
-        });
-
-        _cutSlider = new Slider
-        {
-            Minimum = 0,
-            Maximum = 1,
-            Value = 1,
-            SmallChange = 0.05,
-            LargeChange = 0.1,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        Grid.SetColumn(_cutSlider, 1);
-        sliderGrid.Children.Add(_cutSlider);
-
-        _cutLabel = new TextBlock
-        {
-            Text = "100%",
-            FontSize = 11,
-            Foreground = InkMuted,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextAlignment = TextAlignment.Right,
-            Margin = new Thickness(10, 0, 0, 0)
-        };
-        Grid.SetColumn(_cutLabel, 2);
-        sliderGrid.Children.Add(_cutLabel);
-
-        _cutSlider.ValueChanged += (_, _) =>
-        {
-            _canvas.SetCutRatio(_cutSlider.Value);
-            _cutLabel.Text = $"{(int)Math.Round(_cutSlider.Value * 100)}%";
-        };
-
-        var controlStack = new StackPanel { Spacing = 0 };
-        controlStack.Children.Add(chipRow);
-        controlStack.Children.Add(sliderGrid);
-        sliderRow.Child = controlStack;
-        dock.Children.Add(sliderRow);
+        chipBar.Child = chipRow;
+        dock.Children.Add(chipBar);
 
         // Canvas card — fills remaining space
         var canvasCard = new Border
@@ -755,8 +706,6 @@ public class PlanningView : UserControl
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Foreground = InkMuted, FontSize = 13
             });
-            _cutSlider.Value = 1.0;
-            _cutLabel.Text = "100%";
             _canvas.SetData(container, []);
             return;
         }
@@ -784,8 +733,6 @@ public class PlanningView : UserControl
         _lastContainer = container;
         _exportPdfBtn.IsEnabled = true;
 
-        _cutSlider.Value = 1.0;
-        _cutLabel.Text = "100%";
         _canvas.SetData(container, output.Placements);
     }
 
@@ -821,6 +768,13 @@ public class PlanningView : UserControl
                 FontSize = 12, Foreground = InkMuted
             });
         }
+
+        double remainCm = StatsCalculator.RemainingDoorLengthCm(container, output.Placements);
+        _statsPanel.Children.Add(new TextBlock
+        {
+            Text = $"พื้นที่ว่างฝั่งประตู: {remainCm:F0} cm ({remainCm / 100:F2} m)",
+            FontSize = 12, Foreground = InkMuted
+        });
     }
 
     // ── PDF export ──────────────────────────────────────────────────────────
