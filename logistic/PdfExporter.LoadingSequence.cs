@@ -13,7 +13,13 @@ internal static partial class PdfExporter
 
         private void DrawLoadingSequenceHeader()
         {
-            EnsureSpace(36);
+            // Always start the loading sequence on its own page.
+            if (_y > MT + 10)
+            {
+                DrawFooter();
+                doc.EndPage();
+                BeginPage();
+            }
             DrawText("ลำดับการโหลดตู้ — เริ่มจากในสุดของตู้ไปประตู",
                      MX, _y, 12, C(0x1E, 0x29, 0x3B), bold: true);
             _y += 16;

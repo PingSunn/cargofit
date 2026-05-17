@@ -17,11 +17,13 @@ internal static partial class PdfExporter
 
             double pct         = containerCbm > 0 ? usedCbm / containerCbm * 100 : 0;
             double totalWeight = statsRows.Sum(r => r.Spec.WeightPerBoxKg * r.TotalPacked);
+            double remainCm    = StatsCalculator.RemainingDoorLengthCm(container, placements);
 
             DrawText(
                 $"{container.Name}  ({container.SizeLabel})   วันที่ {DateTime.Today:dd/MM/yyyy}" +
                 $"   CBM {usedCbm:F2}/{containerCbm:F2} m³ ({pct:F0}%)" +
-                $"   น้ำหนักรวม {totalWeight:F1} kg",
+                $"   น้ำหนักรวม {totalWeight:F1} kg" +
+                $"   พื้นที่ว่างฝั่งประตู {remainCm:F0} cm ({remainCm / 100:F2} m)",
                 MX, _y, 9.5f, C(0x64, 0x74, 0x8B));
             _y += 15;
 
