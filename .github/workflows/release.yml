@@ -88,20 +88,6 @@ jobs:
       contents: write   # needed to create releases + upload assets
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Install vpk
-        run: dotnet tool install -g vpk
-
-      - name: Extract version
-        id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
       # Download all build artifacts into one flat directory
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -113,14 +99,13 @@ jobs:
       - name: List release assets
         run: ls -lh dist/releases/
 
-      # Create GitHub Release and upload all Velopack assets
-      - name: Upload to GitHub Releases
+      # gh CLI is pre-installed on all GitHub Actions runners
+      # ไม่ใช้ vpk upload github เพราะมันดู channel ของ runner (linux) ไม่ใช่ของที่ pack ไว้
+      - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          vpk upload github \
-            --repoUrl "https://github.com/PingSunn/cargofit" \
-            --token "$GITHUB_TOKEN" \
-            --outputDir "dist/releases" \
-            --tag "${{ github.ref_name }}" \
-            --releaseName "CargoFit ${{ github.ref_name }}"
+          gh release create "${{ github.ref_name }}" \
+            --title "CargoFit ${{ github.ref_name }}" \
+            --repo "PingSunn/cargofit" \
+            dist/releases/*
