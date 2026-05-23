@@ -38,10 +38,10 @@ internal static class AdminHtml
             <tr>
               <th class='px-4 py-2 text-left'>Token</th>
               <th class='px-4 py-2 text-left'>ลูกค้า</th>
-              <th class='px-4 py-2 text-left'>หมดอายุ</th>
+              <th class='px-4 py-2 text-left'>หมดอายุ <span class='normal-case text-slate-400'>(เวลาไทย)</span></th>
               <th class='px-4 py-2 text-left'>สถานะ</th>
               <th class='px-4 py-2 text-left'>ผูกเครื่อง</th>
-              <th class='px-4 py-2 text-left'>ใช้งานล่าสุด</th>
+              <th class='px-4 py-2 text-left'>ใช้งานล่าสุด <span class='normal-case text-slate-400'>(เวลาไทย)</span></th>
               <th class='px-4 py-2'></th>
             </tr>
           </thead>
@@ -100,9 +100,9 @@ internal static class AdminHtml
             </span></div>
             <div><span class='text-slate-500'>หมดอายุ:</span> <span class='font-medium'>
         """);
-        sb.Append(license.ExpiresAt.ToString("yyyy-MM-dd HH:mm"));
+        sb.Append(ToBangkok(license.ExpiresAt).ToString("yyyy-MM-dd HH:mm"));
         sb.Append("""
-              UTC</span></div>
+              (เวลาไทย)</span></div>
           </div>
         </div>
         <a href='/admin' class='inline-block bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium px-4 py-2 rounded'>← กลับไปหน้ารายการ</a>
@@ -111,12 +111,15 @@ internal static class AdminHtml
         return sb.ToString();
     }
 
+    // Database stores UTC; display in Bangkok time (UTC+7, no DST).
+    private static DateTime ToBangkok(DateTime utc) => utc.AddHours(7);
+
     private static string RenderRow(License l)
     {
         var (statusLabel, statusClass) = StatusBadge(l);
         var lastSeen = l.LastSeenAt is null
             ? "<span class='text-slate-300'>—</span>"
-            : Escape(l.LastSeenAt.Value.ToString("yyyy-MM-dd HH:mm"));
+            : Escape(ToBangkok(l.LastSeenAt.Value).ToString("yyyy-MM-dd HH:mm"));
         var bound = l.MachineId is null
             ? "<span class='text-slate-300'>—</span>"
             : "<span class='font-mono text-xs text-slate-500'>" + Escape(l.MachineId.Substring(0, Math.Min(12, l.MachineId.Length))) + "…</span>";
@@ -141,7 +144,7 @@ internal static class AdminHtml
           <tr class='hover:bg-slate-50'>
             <td class='px-4 py-3'>{tokenCell}</td>
             <td class='px-4 py-3 text-slate-900'>{Escape(l.ClientName)}</td>
-            <td class='px-4 py-3 text-slate-700'>{l.ExpiresAt:yyyy-MM-dd}</td>
+            <td class='px-4 py-3 text-slate-700'>{ToBangkok(l.ExpiresAt):yyyy-MM-dd}</td>
             <td class='px-4 py-3'><span class='inline-block px-2 py-0.5 rounded text-xs font-medium {statusClass}'>{statusLabel}</span></td>
             <td class='px-4 py-3'>{bound}</td>
             <td class='px-4 py-3 text-slate-500 text-xs'>{lastSeen}</td>
