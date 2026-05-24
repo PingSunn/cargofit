@@ -6,6 +6,7 @@ public partial class SettingsWindow : UserControl
 {
     private readonly ContainerSettingsPanel _containerView = new();
     private readonly ProductSettingsPanel   _productView   = new();
+    private readonly AboutPanel             _aboutView     = new();
 
     public SettingsWindow()
     {
@@ -19,6 +20,7 @@ public partial class SettingsWindow : UserControl
         {
             "Container" => (Control)_containerView,
             "Product"   => _productView,
+            "About"     => _aboutView,
             _           => null
         };
     }

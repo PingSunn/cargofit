@@ -39,6 +39,7 @@
           </ListBox.ItemContainerTheme>
           <ListBoxItem Content="Container" Tag="Container" />
           <ListBoxItem Content="สินค้า" Tag="Product" />
+          <ListBoxItem Content="เกี่ยวกับ" Tag="About" />
         </ListBox>
       </StackPanel>
     </Border>
