@@ -73,11 +73,10 @@ internal static partial class PdfExporter
 
         private SKPaint MkPaint(SKColor color, float size, bool bold = false) => new()
         {
-            Typeface     = tf,
-            TextSize     = size,
-            Color        = color,
-            IsAntialias  = true,
-            FakeBoldText = bold,
+            Typeface    = bold ? tfBold : tf,
+            TextSize    = size,
+            Color       = color,
+            IsAntialias = true,
         };
 
         private static SKPaint Fill(SKColor color) => new()

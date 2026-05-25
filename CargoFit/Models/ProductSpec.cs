@@ -81,15 +81,19 @@ public record ProductSpec(
         if (!File.Exists(FilePath))
             SeedFromResource();
 
-        if (!File.Exists(FilePath))
-        {
-            All.AddRange(Defaults);
-            return;
-        }
+        if (!File.Exists(FilePath)) { All.AddRange(Defaults); return; }
+
         try
         {
             var json = File.ReadAllText(FilePath);
             var specs = JsonSerializer.Deserialize<ProductSpec[]>(json, JsonOptions.WriteIndented);
+            if (specs is null || specs.Length == 0)
+            {
+                // File exists but empty (e.g. user deleted all and saved) — re-seed
+                SeedFromResource();
+                json = File.ReadAllText(FilePath);
+                specs = JsonSerializer.Deserialize<ProductSpec[]>(json, JsonOptions.WriteIndented);
+            }
             if (specs is null || specs.Length == 0) { All.AddRange(Defaults); return; }
             All.Clear();
             All.AddRange(specs);

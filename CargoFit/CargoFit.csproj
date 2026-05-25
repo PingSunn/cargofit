@@ -31,4 +31,10 @@
         <EmbeddedResource Include="..\products.json"   LogicalName="CargoFit.products.json"   />
     </ItemGroup>
 
+    <!-- Bundled fonts: Prompt (Thai+Latin) for PDF export -->
+    <ItemGroup>
+        <EmbeddedResource Include="Assets\Prompt-Regular.ttf" LogicalName="CargoFit.Prompt-Regular.ttf" />
+        <EmbeddedResource Include="Assets\Prompt-Bold.ttf"    LogicalName="CargoFit.Prompt-Bold.ttf"    />
+    </ItemGroup>
+
 </Project>

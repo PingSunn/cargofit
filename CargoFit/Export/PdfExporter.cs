@@ -45,30 +45,25 @@ internal static partial class PdfExporter
         double containerCbm = StatsCalculator.ContainerCbm(container);
         double usedCbm      = StatsCalculator.UsedCbm(placements);
 
-        using var tf  = LoadTypeface();
-        using var ms  = new MemoryStream();
-        using var doc = SKDocument.CreatePdf(ms);
+        using var tf     = LoadTypefaceFromResource("CargoFit.Prompt-Regular.ttf");
+        using var tfBold = LoadTypefaceFromResource("CargoFit.Prompt-Bold.ttf");
+        using var ms     = new MemoryStream();
+        using var doc    = SKDocument.CreatePdf(ms);
 
-        new Renderer(doc, tf, container, placements.ToList(), statsRows, containerCbm, usedCbm)
+        new Renderer(doc, tf, tfBold, container, placements.ToList(), statsRows, containerCbm, usedCbm)
             .Render();
 
         doc.Close();
         return ms.ToArray();
     }
 
-    private static SKTypeface LoadTypeface()
+    private static SKTypeface LoadTypefaceFromResource(string resourceName)
     {
-        string[] candidates =
-        [
-            "/Library/Fonts/Arial Unicode.ttf",
-            "/Library/Fonts/Arial Unicode MS.ttf",
-            "/System/Library/Fonts/Supplemental/Arial Unicode MS.ttf",
-            "C:\\Windows\\Fonts\\arialuni.ttf",
-        ];
-        foreach (var path in candidates)
+        var asm = typeof(PdfExporter).Assembly;
+        using var stream = asm.GetManifestResourceStream(resourceName);
+        if (stream is not null)
         {
-            if (!File.Exists(path)) continue;
-            try { return SKTypeface.FromFile(path); } catch { /* try next */ }
+            try { return SKTypeface.FromStream(stream); } catch { /* fall through */ }
         }
         return SKTypeface.Default;
     }
@@ -80,6 +75,7 @@ internal static partial class PdfExporter
     private sealed partial class Renderer(
         SKDocument doc,
         SKTypeface tf,
+        SKTypeface tfBold,
         ContainerSpec container,
         List<BoxPlacement> placements,
         List<StatsCalculator.PackStatRow> statsRows,
