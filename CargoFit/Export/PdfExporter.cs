@@ -24,6 +24,11 @@ internal static partial class PdfExporter
     private const float MB       = 40f;
     private const float ContentW = PageW - 2 * MX; // 511
 
+    // ── Typography ────────────────────────────────────────────────────────────
+    // Extra vertical gap added after text lines to clear Thai tone marks
+    // (วรรณยุกต์ sit above the normal ascender line and need breathing room).
+    private const float ThaiLeading = 3f;
+
     // ── Card geometry ─────────────────────────────────────────────────────────
     private const float CardPad   = 8f;
     private const float AccentBar = 4f;
@@ -101,7 +106,10 @@ internal static partial class PdfExporter
             for (int i = 0; i < units.Count; i++)
                 DrawLoadingUnitCard(i + 1, units.Count, units[i]);
 
-            // Appendix: Pattern A/B reference cards per product
+            // Appendix: Pattern A/B reference cards per product — always start on a new page
+            DrawFooter();
+            doc.EndPage();
+            BeginPage();
             DrawAppendixHeader();
             foreach (var row in statsRows
                                  .Where(r => r.HasPattern)

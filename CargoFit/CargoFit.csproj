@@ -35,10 +35,12 @@
         <EmbeddedResource Include="..\products.json"   LogicalName="CargoFit.products.json"   />
     </ItemGroup>
 
-    <!-- Bundled fonts: Prompt (Thai+Latin) for PDF export -->
+    <!-- Bundled fonts: Prompt (Thai+Latin) — EmbeddedResource for SkiaSharp PDF, AvaloniaResource for UI -->
     <ItemGroup>
         <EmbeddedResource Include="Assets\Prompt-Regular.ttf" LogicalName="CargoFit.Prompt-Regular.ttf" />
         <EmbeddedResource Include="Assets\Prompt-Bold.ttf"    LogicalName="CargoFit.Prompt-Bold.ttf"    />
+        <AvaloniaResource  Include="Assets\Prompt-Regular.ttf" />
+        <AvaloniaResource  Include="Assets\Prompt-Bold.ttf"    />
     </ItemGroup>
 
 </Project>
