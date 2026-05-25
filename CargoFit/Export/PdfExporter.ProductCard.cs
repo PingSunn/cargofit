@@ -16,10 +16,10 @@ internal static partial class PdfExporter
             EnsureSpace(34);
             DrawText("ภาคผนวก — รูปแบบการวางต่อชั้น (Pattern A / B)",
                      MX, _y, 12, C(0x1E, 0x29, 0x3B), bold: true);
-            _y += 16;
+            _y += 16 + ThaiLeading;
             DrawText("ใช้สำหรับตรวจสอบรูปแบบการวางในแต่ละชั้นของสินค้าแต่ละชนิด",
                      MX, _y, 9, C(0x64, 0x74, 0x8B));
-            _y += 14;
+            _y += 14 + ThaiLeading;
         }
 
         // ── Product card ──────────────────────────────────────────────────────

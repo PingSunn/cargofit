@@ -2,8 +2,18 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="CargoFit.App"
              RequestedThemeVariant="Light">
+  <Application.Resources>
+    <ResourceDictionary>
+      <!-- Override Fluent theme default font with Prompt (Thai+Latin) -->
+      <FontFamily x:Key="ContentControlThemeFontFamily">avares://CargoFit/Assets#Prompt</FontFamily>
+    </ResourceDictionary>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
+    <!-- Fallback: inherit Prompt via FontFamily property on all windows -->
+    <Style Selector="Window">
+      <Setter Property="FontFamily" Value="avares://CargoFit/Assets#Prompt"/>
+    </Style>
 
     <!-- Primary button -->
     <Style Selector="Button.primary">

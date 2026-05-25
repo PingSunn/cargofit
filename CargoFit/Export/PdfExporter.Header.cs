@@ -13,7 +13,7 @@ internal static partial class PdfExporter
         private void DrawPageHeader()
         {
             DrawText("รายงานการจัดเรียงสินค้า", MX, _y, 17, C(0x1E, 0x29, 0x3B), bold: true);
-            _y += 26;
+            _y += 26 + ThaiLeading;
 
             double pct         = containerCbm > 0 ? usedCbm / containerCbm * 100 : 0;
             double totalWeight = statsRows.Sum(r => r.Spec.WeightPerBoxKg * r.TotalPacked);
@@ -25,7 +25,7 @@ internal static partial class PdfExporter
                 $"   น้ำหนักรวม {totalWeight:F1} kg" +
                 $"   พื้นที่ว่างฝั่งประตู {remainCm:F0} cm ({remainCm / 100:F2} m)",
                 MX, _y, 9.5f, C(0x64, 0x74, 0x8B));
-            _y += 15;
+            _y += 15 + ThaiLeading;
 
             DrawCbmBar(MX, _y, ContentW, 6f, (float)(usedCbm / containerCbm));
             _y += 10;

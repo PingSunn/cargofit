@@ -22,10 +22,10 @@ internal static partial class PdfExporter
             }
             DrawText("ลำดับการโหลดตู้ — เริ่มจากในสุดของตู้ไปประตู",
                      MX, _y, 12, C(0x1E, 0x29, 0x3B), bold: true);
-            _y += 16;
+            _y += 16 + ThaiLeading;
             DrawText("แต่ละขั้นตอน: วางทีละชั้น (ล่าง→บน) จนเต็มก่อน แล้วค่อยทำขั้นต่อไป",
                      MX, _y, 9, C(0x64, 0x74, 0x8B));
-            _y += 14;
+            _y += 14 + ThaiLeading;
         }
 
         // ── Loading unit data model ───────────────────────────────────────────
