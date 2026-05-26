@@ -599,12 +599,13 @@ public class PackingEngineTests
 
         if (condo.Count == 0) return;
 
-        // Adjacent primary = stack with the largest Y+BL (i.e. closest to condo area).
+        // After MoveCandoToInnermost, condo sits at Y=0 and primary starts at Y=condoDepth.
+        // The primary stack adjacent to the condo border is the one with the LOWEST MinY
+        // (= tallest stack, placed innermost by global height sort).
         double adjacentTopZ = primary
-            .GroupBy(p => p.StackIndex)
-            .Select(g => (EndY: g.Max(p => p.Y + p.BL), TopZ: g.Max(p => p.Z + p.BH)))
-            .OrderByDescending(s => s.EndY)
-            .ThenByDescending(s => s.TopZ)
+            .GroupBy(p => (p.ProductIndex, p.StackIndex))
+            .Select(g => (MinY: g.Min(p => p.Y), TopZ: g.Max(p => p.Z + p.BH)))
+            .OrderBy(s => s.MinY)
             .Select(s => s.TopZ)
             .First();
 

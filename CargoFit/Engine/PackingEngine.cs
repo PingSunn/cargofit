@@ -589,8 +589,22 @@ internal static class PackingEngine
 
         int fullBpl = CountLayerCapacity(spec.PatternA, spec, dims, startY);
 
+        // If the product supports condo, cap primary at floor(requested / fullStack) stacks.
+        // A partial last stack would consume a full stack-depth slot while only holding a
+        // fraction of boxes — the remainder is better handled by condo (compact column at
+        // condoAreaStart) than by opening another primary slot.  Without this cap, the
+        // first-placed product greedily occupies one extra stack-depth that the second
+        // product could have used, causing the second product to run short.
+        int maxStacks = int.MaxValue;
+        if (spec.CondoCount > 0 && fullBpl > 0 && layerLimit > 0)
+        {
+            int fullStackBoxes = fullBpl * layerLimit;
+            maxStacks = Math.Max(1, requested / fullStackBoxes); // floor division
+        }
+
         while (packed < requested)
         {
+            if (stackIndex - initialStackIndex >= maxStacks) break;
             double stackY = startY + (stackIndex - initialStackIndex) * stackDepth;
             if (stackY >= dims.L) break;
             if (CountLayerCapacity(spec.PatternA, spec, dims, stackY) < fullBpl) break;
@@ -835,48 +849,52 @@ internal static class PackingEngine
     private static void SortStacksByHeight(
         List<PackInfo> packInfos, List<BoxPlacement> placements, ContainerDims dims)
     {
-        foreach (var info in packInfos)
+        // Global sort: collect ALL primary stacks across every product and sort by height
+        // descending so that stacks of similar height (regardless of product) cluster together.
+        // Tall stacks → lowest Y (innermost / back wall); short stacks → toward door.
+        var patternProducts = packInfos.Where(x => x.HasPattern).Select(x => x.ProductIndex).ToHashSet();
+
+        var allStacks = placements
+            .Where(p => p.StackIndex < CondoStackBase && patternProducts.Contains(p.ProductIndex))
+            .GroupBy(p => (p.ProductIndex, p.StackIndex))
+            .Select(g => (
+                Key:    g.Key,
+                Height: g.Max(p => p.LayerIndex) + 1,
+                MinY:   g.Min(p => p.Y),
+                Depth:  g.Max(p => p.Y + p.BL) - g.Min(p => p.Y)
+            ))
+            .OrderBy(s => s.MinY)   // deterministic original order
+            .ToList();
+
+        if (allStacks.Count < 2) return;
+
+        var sorted = allStacks
+            .OrderByDescending(s => s.Height)
+            .ThenBy(s => s.MinY)    // stable tie-break preserves original order within equal heights
+            .ToList();
+
+        if (allStacks.Select(s => s.Key).SequenceEqual(sorted.Select(s => s.Key))) return;
+
+        // Repack Y from scratch: assign new start positions in sorted (tall-first) order.
+        // Each stack keeps its own depth; only its start Y changes.
+        var newMinYMap = new Dictionary<(int, int), double>();
+        double y = 0;
+        foreach (var stack in sorted)
         {
-            if (!info.HasPattern) continue;
+            if (Math.Abs(y - stack.MinY) > 0.001)
+                newMinYMap[stack.Key] = y;
+            y += stack.Depth;
+        }
 
-            var stacks = placements
-                .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase)
-                .GroupBy(p => p.StackIndex)
-                .Select(g => (SI: g.Key, Height: g.Max(p => p.LayerIndex) + 1, MinY: g.Min(p => p.Y)))
-                .OrderBy(x => x.MinY)
-                .ToList();
+        if (newMinYMap.Count == 0) return;
 
-            if (stacks.Count < 2) continue;
-
-            var ySlots  = stacks.Select(x => x.MinY).ToList();
-            var caps    = ySlots.Select(y => CountLayerCapacity(info.Spec.PatternA!, info.Spec, dims, y)).ToList();
-            var sorted  = stacks.OrderByDescending(x => x.Height).ToList(); // tall → lowest Y (back wall/innermost)
-
-            if (stacks.Select(x => x.SI).SequenceEqual(sorted.Select(x => x.SI))) continue;
-
-            // Only remap when every stack lands at a slot with the same layer capacity.
-            var remapY = new Dictionary<int, double>();
-            for (int i = 0; i < sorted.Count; i++)
-            {
-                int srcSI   = sorted[i].SI;
-                double newY = ySlots[i];
-                double oldY = stacks.First(x => x.SI == srcSI).MinY;
-                int oldCap  = CountLayerCapacity(info.Spec.PatternA!, info.Spec, dims, oldY);
-                if (caps[i] != oldCap) continue;
-                if (Math.Abs(newY - oldY) > 0.001)
-                    remapY[srcSI] = newY;
-            }
-
-            if (remapY.Count == 0) continue;
-
-            for (int j = 0; j < placements.Count; j++)
-            {
-                var p = placements[j];
-                if (p.ProductIndex != info.ProductIndex || p.StackIndex >= CondoStackBase) continue;
-                if (!remapY.TryGetValue(p.StackIndex, out double newMinY)) continue;
-                double oldMinY = stacks.First(x => x.SI == p.StackIndex).MinY;
-                placements[j] = p with { Y = newMinY + (p.Y - oldMinY) };
-            }
+        for (int j = 0; j < placements.Count; j++)
+        {
+            var p = placements[j];
+            if (p.StackIndex >= CondoStackBase) continue;
+            if (!newMinYMap.TryGetValue((p.ProductIndex, p.StackIndex), out double newMinY)) continue;
+            double oldMinY = allStacks.First(s => s.Key == (p.ProductIndex, p.StackIndex)).MinY;
+            placements[j] = p with { Y = newMinY + (p.Y - oldMinY) };
         }
     }
 

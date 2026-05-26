@@ -759,15 +759,15 @@ public class PlanningView : UserControl
         _statsPanel.Children.Clear();
         _hiddenProducts.Clear();
 
-        // Sort CBM ascending: smallest → back wall (Y=0, innermost), largest → door side (adjacent to condo)
+        // Sort by total CBM descending (Cbm/box × qty): largest volume → back wall (innermost), smallest → door side
         var requests = _products
             .Where(x => x.Cb.IsChecked == true && _qtyMap.ContainsKey(x.Spec))
-            .OrderBy(x => x.Spec.Cbm)
             .Select(x =>
             {
                 int qty = int.TryParse(_qtyMap[x.Spec].QtyBox.Text, out int q) && q > 0 ? q : 1;
                 return (x.Spec, qty);
             })
+            .OrderByDescending(x => x.Spec.Cbm * x.qty)
             .ToList();
 
         if (requests.Count == 0)
