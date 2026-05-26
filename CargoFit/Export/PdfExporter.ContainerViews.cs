@@ -53,7 +53,7 @@ internal static partial class PdfExporter
         {
             double cW = container.InteriorW, cL = container.InteriorL, cH = container.InteriorH;
             var proj = new PdfIsoProjection(
-                Math.PI / 4, Math.PI / 6, 1.0,
+                Math.PI + Math.PI / 4, Math.PI / 6, 1.0,
                 cW, cL, cH, bounds.Width, bounds.Height);
 
             _canvas.Save();

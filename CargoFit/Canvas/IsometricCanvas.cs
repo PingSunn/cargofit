@@ -36,7 +36,7 @@ public class IsometricCanvas : Control
     // ── Camera state ──────────────────────────────────────────────────────────
     private struct CameraState
     {
-        public double Azimuth        = Math.PI / 4;
+        public double Azimuth        = Math.PI + Math.PI / 4;
         public double Elevation      = 0.50;
         public double Zoom           = 1.0;
         public bool   Dragging;
@@ -69,7 +69,7 @@ public class IsometricCanvas : Control
 
     public void ResetView()
     {
-        _cam.Azimuth   = Math.PI / 4;
+        _cam.Azimuth   = Math.PI + Math.PI / 4;
         _cam.Elevation = 0.50;
         _cam.Zoom      = 1.0;
         InvalidateVisual();

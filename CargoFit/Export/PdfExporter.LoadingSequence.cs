@@ -516,7 +516,7 @@ internal static partial class PdfExporter
             // Camera angle: higher elevation = camera lower in space (more side-on view),
             // lower elevation = closer to top-down. Full container uses π/6 (30°); condos
             // get π/4 (45°) for a more side-on read that shows box stacking clearly.
-            const double azimuth   = Math.PI / 4;
+            const double azimuth   = Math.PI + Math.PI / 4;
             const double elevation = Math.PI / 4;
 
             var proj = new PdfIsoProjection(
