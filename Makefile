@@ -1,7 +1,16 @@
-.PHONY: run build test run-test
+.PHONY: run build test run-test run-gui
 
-# รัน GUI ปกติ
+# รัน GUI ปกติ (ไม่มี preset)
 run:
+	dotnet run --project CargoFit/CargoFit.csproj
+
+# รัน GUI พร้อม preset — copy ไฟล์ไปที่ root ก่อน แล้ว GUI จะโหลดอัตโนมัติ
+# Usage: make run-gui FILE=testdata/devpreset.json
+run-gui:
+ifndef FILE
+	$(error กรุณาระบุ FILE เช่น: make run-gui FILE=testdata/devpreset.json)
+endif
+	cp $(FILE) devpreset.json
 	dotnet run --project CargoFit/CargoFit.csproj
 
 # Build เฉยๆ
