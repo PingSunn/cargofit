@@ -47,7 +47,7 @@ internal static class CanvasLabelRenderer
     }
 
     internal static void DrawStackWidthLabel(DrawingContext dc,
-        IReadOnlyList<BoxPlacement> placements, IsometricProjection proj)
+        IReadOnlyList<BoxPlacement> placements, IsometricProjection proj, double cW, Rect bounds)
     {
         if (placements.Count == 0) return;
 
@@ -57,21 +57,31 @@ internal static class CanvasLabelRenderer
             .OrderBy(s => s.startY)
             .ToList();
 
-        var br  = new SolidColorBrush(Color.Parse("#475569"));
-        var pen = new Pen(br, 2.0);
+        var br      = new SolidColorBrush(Color.Parse("#475569"));
+        var brFaint = new SolidColorBrush(Color.FromArgb(120, 71, 85, 105));
+        var pen     = new Pen(br, 1.5);
+        var penDash = new Pen(brFaint, 1.0, new DashStyle([4, 4], 0));
+
+        const double labelRowH = 18;
+        double labelY = bounds.Height - labelRowH;
 
         foreach (var (startY, endY) in stacks)
         {
-            var p0 = proj.Project(0, startY, 0);
-            var p1 = proj.Project(0, endY,   0);
-
-            dc.DrawLine(pen, p0, p1);
-            dc.DrawLine(pen, new Point(p0.X - 10, p0.Y), new Point(p0.X + 3, p0.Y));
-            dc.DrawLine(pen, new Point(p1.X - 10, p1.Y), new Point(p1.X + 3, p1.Y));
-
-            var ft  = MakeText($"{(int)Math.Round(endY - startY)} ซม.", 10, br);
+            var p0  = proj.Project(cW, startY, 0);
+            var p1  = proj.Project(cW, endY,   0);
             var mid = new Point((p0.X + p1.X) / 2, (p0.Y + p1.Y) / 2);
-            dc.DrawText(ft, new Point(mid.X - ft.Width - 20, mid.Y - ft.Height / 2));
+
+            // Bracket on the right edge (short ticks)
+            dc.DrawLine(pen, p0, p1);
+            dc.DrawLine(pen, new Point(p0.X - 3, p0.Y), new Point(p0.X + 6, p0.Y));
+            dc.DrawLine(pen, new Point(p1.X - 3, p1.Y), new Point(p1.X + 6, p1.Y));
+
+            // Dashed connector from bracket midpoint down to label row
+            dc.DrawLine(penDash, new Point(mid.X, mid.Y), new Point(mid.X, labelY - 2));
+
+            // Label at the bottom
+            var ft = MakeText($"{(int)Math.Round(endY - startY)} ซม.", 10, br);
+            dc.DrawText(ft, new Point(mid.X - ft.Width / 2, labelY));
         }
     }
 

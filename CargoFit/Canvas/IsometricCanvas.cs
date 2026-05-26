@@ -43,7 +43,7 @@ public class IsometricCanvas : Control
     private struct CameraState
     {
         public double Azimuth        = Math.PI + Math.PI / 4;
-        public double Elevation      = 0.35;
+        public double Elevation      = Math.PI / 3;   // 60°
         public double Zoom           = 1.0;
         public bool   Dragging;
         public Point  DragStart;
@@ -76,7 +76,7 @@ public class IsometricCanvas : Control
     public void ResetView()
     {
         _cam.Azimuth   = Math.PI + Math.PI / 4;
-        _cam.Elevation = 0.35;
+        _cam.Elevation = Math.PI / 3;   // 60°
         _cam.Zoom      = 1.0;
         InvalidateVisual();
         CameraChanged?.Invoke();
@@ -226,7 +226,7 @@ public class IsometricCanvas : Control
             var labPlacements = gapHalf > 0.001
                 ? Placements.Select(p => p with { Y = p.Y + gapHalf }).ToList()
                 : (IReadOnlyList<BoxPlacement>)Placements;
-            CanvasLabelRenderer.DrawStackWidthLabel(context, labPlacements, proj);
+            CanvasLabelRenderer.DrawStackWidthLabel(context, labPlacements, proj, cW, bounds);
         }
 
         if (_cutRatio < 0.999 && clipped.Count > 0)
