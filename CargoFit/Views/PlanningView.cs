@@ -35,7 +35,8 @@ public class PlanningView : UserControl
     private IsometricCanvas _canvas = null!;
     private StackPanel _statsPanel = null!;
     private readonly HashSet<int> _hiddenProducts = [];
-    private Button _exportPdfBtn = null!;
+    private Button _exportPdfBtn   = null!;
+    private Button _exportDebugBtn = null!;
 
     // Camera overlay labels
     private TextBlock _camAzLabel  = null!;
@@ -204,10 +205,12 @@ public class PlanningView : UserControl
         // Row 2 (*)    = quantity scroll — fills remaining space
         // Row 3 (Auto) = Start button
         // Row 4 (Auto) = PDF button
+        // Row 5 (Auto) = Debug export button
         var rootGrid = new Grid();
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Star));
+        rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
@@ -348,6 +351,21 @@ public class PlanningView : UserControl
         _exportPdfBtn.Click += ExportPdf_Click;
         Grid.SetRow(_exportPdfBtn, 4);
         rootGrid.Children.Add(_exportPdfBtn);
+
+        // ── Row 5: Debug export button ───────────────────────────────────────
+        _exportDebugBtn = new Button
+        {
+            Content = "ส่งข้อมูล Debug",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            FontSize = 12,
+            IsEnabled = false,
+            Margin = new Thickness(0, 4, 0, 0),
+            Padding = new Thickness(0, 8)
+        };
+        _exportDebugBtn.Click += ExportDebugPackage_Click;
+        Grid.SetRow(_exportDebugBtn, 5);
+        rootGrid.Children.Add(_exportDebugBtn);
 
         panel.Child = rootGrid;
         return panel;
@@ -782,7 +800,9 @@ public class PlanningView : UserControl
             return;
         }
 
+        PackingLog.Init(bufferOnly: true);
         var output = PackingEngine.Calculate(container, requests);
+        PackingLog.Finish();
 
         // Slide the entire pack flush to the back wall (Y=0) — preserves internal order, no flip
         if (output.Placements.Count > 0)
@@ -802,7 +822,8 @@ public class PlanningView : UserControl
         _lastOutput    = output;
         _lastRequests  = requests;
         _lastContainer = container;
-        _exportPdfBtn.IsEnabled = true;
+        _exportPdfBtn.IsEnabled   = true;
+        _exportDebugBtn.IsEnabled = true;
 
         _canvas.SetData(container, output.Placements);
     }
@@ -884,6 +905,52 @@ public class PlanningView : UserControl
         finally
         {
             _exportPdfBtn.IsEnabled = true;
+        }
+    }
+
+    // ── Debug package export ─────────────────────────────────────────────────
+
+    private async void ExportDebugPackage_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_lastOutput is null || _lastRequests is null || _lastContainer is null) return;
+
+        var file = await TopLevel.GetTopLevel(this)!.StorageProvider.SaveFilePickerAsync(
+            new Avalonia.Platform.Storage.FilePickerSaveOptions
+            {
+                Title             = "บันทึกข้อมูล Debug",
+                DefaultExtension  = "zip",
+                SuggestedFileName = $"cargofit_debug_{DateTime.Now:yyyyMMdd_HHmm}.zip",
+                FileTypeChoices   =
+                [
+                    new Avalonia.Platform.Storage.FilePickerFileType("ZIP") { Patterns = ["*.zip"] }
+                ]
+            });
+
+        if (file is null) return;
+
+        _exportDebugBtn.IsEnabled = false;
+        try
+        {
+            // Canvas capture ต้องทำบน UI thread ก่อน Task.Run
+            byte[] canvasPng = DebugPackageExporter.CaptureCanvasPng(_canvas);
+            var container    = _lastContainer!;
+            var requests     = _lastRequests!;
+            var output       = _lastOutput!;
+            string logText   = PackingLog.GetLastRunLog();
+
+            byte[] zipBytes = await System.Threading.Tasks.Task.Run(() =>
+                DebugPackageExporter.Build(canvasPng, container, requests, output, logText));
+
+            await using var stream = await file.OpenWriteAsync();
+            await stream.WriteAsync(zipBytes);
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync($"ส่งออกข้อมูล Debug ไม่สำเร็จ: {ex.Message}");
+        }
+        finally
+        {
+            _exportDebugBtn.IsEnabled = true;
         }
     }
 
