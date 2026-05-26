@@ -31,13 +31,19 @@ public class IsometricCanvas : Control
     public List<BoxPlacement> Placements { get; private set; } = [];
     public ContainerSpec? Container { get; private set; }
 
+    public event Action? CameraChanged;
+
+    public double CameraAzimuth   => _cam.Azimuth;
+    public double CameraElevation => _cam.Elevation;
+    public double CameraZoom      => _cam.Zoom;
+
     public IsometricCanvas() { Cursor = new Cursor(StandardCursorType.Hand); }
 
     // ── Camera state ──────────────────────────────────────────────────────────
     private struct CameraState
     {
         public double Azimuth        = Math.PI + Math.PI / 4;
-        public double Elevation      = 0.50;
+        public double Elevation      = 0.35;
         public double Zoom           = 1.0;
         public bool   Dragging;
         public Point  DragStart;
@@ -70,9 +76,10 @@ public class IsometricCanvas : Control
     public void ResetView()
     {
         _cam.Azimuth   = Math.PI + Math.PI / 4;
-        _cam.Elevation = 0.50;
+        _cam.Elevation = 0.35;
         _cam.Zoom      = 1.0;
         InvalidateVisual();
+        CameraChanged?.Invoke();
     }
 
     public void SetData(ContainerSpec container, List<BoxPlacement> placements)
@@ -101,6 +108,7 @@ public class IsometricCanvas : Control
         _cam.Azimuth   = _cam.AzimuthAtDrag - (pos.X - _cam.DragStart.X) * 0.008;
         _cam.Elevation = Math.Clamp(_cam.ElevationAtDrag - (pos.Y - _cam.DragStart.Y) * 0.006, 0.08, 1.45);
         InvalidateVisual();
+        CameraChanged?.Invoke();
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -116,6 +124,7 @@ public class IsometricCanvas : Control
         _cam.Azimuth -= e.Delta.X * 0.08;
         _cam.Zoom     = Math.Clamp(_cam.Zoom * Math.Pow(1.12, e.Delta.Y), 0.2, 8.0);
         InvalidateVisual();
+        CameraChanged?.Invoke();
     }
 
     // ── Render ────────────────────────────────────────────────────────────────

@@ -37,6 +37,11 @@ public class PlanningView : UserControl
     private readonly HashSet<int> _hiddenProducts = [];
     private Button _exportPdfBtn = null!;
 
+    // Camera overlay labels
+    private TextBlock _camAzLabel  = null!;
+    private TextBlock _camElLabel  = null!;
+    private TextBlock _camZoomLabel = null!;
+
     private PackingOutput? _lastOutput;
     private IReadOnlyList<(ProductSpec Spec, int Qty)>? _lastRequests;
     private ContainerSpec? _lastContainer;
@@ -147,7 +152,35 @@ public class PlanningView : UserControl
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
         };
-        canvasCard.Child = _canvas;
+
+        // Camera info overlay — bottom-right corner
+        _camAzLabel   = MakeCamLabel();
+        _camElLabel   = MakeCamLabel();
+        _camZoomLabel = MakeCamLabel();
+        var camOverlay = new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment   = VerticalAlignment.Bottom,
+            Margin              = new Thickness(0, 0, 10, 10),
+            Background          = new SolidColorBrush(Color.FromArgb(0xCC, 0x0F, 0x17, 0x2A)),
+            CornerRadius        = new CornerRadius(7),
+            Padding             = new Thickness(9, 6),
+            Child = new StackPanel
+            {
+                Spacing = 2,
+                Children = { _camAzLabel, _camElLabel, _camZoomLabel }
+            }
+        };
+
+        var canvasGrid = new Grid();
+        canvasGrid.Children.Add(_canvas);
+        canvasGrid.Children.Add(camOverlay);
+        canvasCard.Child = canvasGrid;
+
+        // Keep overlay in sync with camera
+        UpdateCamOverlay();
+        _canvas.CameraChanged += UpdateCamOverlay;
+
         dock.Children.Add(canvasCard);
 
         return dock;
@@ -930,4 +963,26 @@ public class PlanningView : UserControl
 
     private sealed record DevPreset(int Container = 0, DevPresetProduct[]? Products = null, bool Calculate = true);
     private sealed record DevPresetProduct(int Index = 0, int Qty = 1);
+
+    // ── Camera overlay helpers ───────────────────────────────────────────────
+
+    private static TextBlock MakeCamLabel() => new()
+    {
+        FontSize   = 9.5,
+        FontFamily = new FontFamily("Courier New,monospace"),
+        Foreground = new SolidColorBrush(Color.FromArgb(0xEE, 0xCB, 0xD5, 0xE1)),
+    };
+
+    private void UpdateCamOverlay()
+    {
+        // Normalise azimuth to [0°, 360°)
+        double az  = _canvas.CameraAzimuth * 180.0 / Math.PI;
+        az = ((az % 360) + 360) % 360;
+        double el  = _canvas.CameraElevation * 180.0 / Math.PI;
+        double zm  = _canvas.CameraZoom;
+
+        _camAzLabel.Text   = $"ทิศ   {az:F1}°";
+        _camElLabel.Text   = $"เอียง  {el:F1}°";
+        _camZoomLabel.Text = $"ซูม   {zm:F2}×";
+    }
 }
