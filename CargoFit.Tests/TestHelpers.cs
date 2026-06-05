@@ -7,9 +7,45 @@ namespace CargoFit.Tests;
 
 internal static class TestHelpers
 {
+    // ── Containers ───────────────────────────────────────────────────────────
+
     internal static ContainerSpec Container20ft()  => new("ตู้สั้น",     "20 ft",    244, 600,  259, Gap: 10);
     internal static ContainerSpec Container40ft()  => new("ตู้ยาว",     "40 ft",    244, 1209, 260, Gap: 10);
     internal static ContainerSpec Container40HC()  => new("ตู้ไฮคิวบ์", "40 ft HC", 244, 1203, 290, Gap: 10);
+
+    // ── Shared product specs (used across multiple test files) ───────────────
+
+    internal static ProductSpec Aloe365ML() => new("Aloe", "365 ML", "Pack 24", 9.79,
+        21.9, 33.4, 20.5,
+        PatternA: [new LayerSection(2, 6, false), new LayerSection(3, 3, true)],
+        PatternB: [new LayerSection(3, 3, true),  new LayerSection(2, 6, false)],
+        MaxLayers: 10, CondoCount: 10);
+
+    internal static ProductSpec Mogu1000ML() => new("Mogu", "1000 ML", "Pack 12", 13.47,
+        26.2, 34.8, 26.7,
+        PatternA: [new LayerSection(4, 2, true), new LayerSection(3, 6, false)],
+        PatternB: [new LayerSection(3, 6, false), new LayerSection(4, 2, true)],
+        MaxLayers: 8, CondoCount: 9);
+
+    internal static ProductSpec Mogu320ML() => new("Mogu", "320 ML", "Pack 24", 8.7,
+        25.8, 38.5, 15.7,
+        PatternA:
+        [
+            new LayerSection(4, 1, true),
+            new LayerSection(0, 0, false, [new SectionSubRow(1, 3, false), new SectionSubRow(1, 2, true), new SectionSubRow(1, 3, false)]),
+            new LayerSection(0, 0, false, [new SectionSubRow(1, 3, false), new SectionSubRow(1, 2, true), new SectionSubRow(1, 3, false)]),
+            new LayerSection(4, 1, true),
+        ],
+        PatternB:
+        [
+            new LayerSection(0, 0, false, [new SectionSubRow(1, 3, false), new SectionSubRow(1, 2, true), new SectionSubRow(1, 3, false)]),
+            new LayerSection(4, 1, true),
+            new LayerSection(4, 1, true),
+            new LayerSection(0, 0, false, [new SectionSubRow(1, 3, false), new SectionSubRow(1, 2, true), new SectionSubRow(1, 3, false)]),
+        ],
+        MaxLayers: 13, CondoCount: 9);
+
+    // ── Dump helper ──────────────────────────────────────────────────────────
 
     internal static void DumpOutput(
         ContainerSpec container,
@@ -34,10 +70,10 @@ internal static class TestHelpers
 
         foreach (var info in output.PackInfos)
         {
-            var s     = info.Spec;
-            int pri   = output.Placements.Count(p =>
-                            p.ProductIndex == info.ProductIndex &&
-                            p.StackIndex   <  PackingEngine.CondoStackBase);
+            var s       = info.Spec;
+            int pri     = output.Placements.Count(p =>
+                              p.ProductIndex == info.ProductIndex &&
+                              p.StackIndex   <  PackingEngine.CondoStackBase);
             int condo   = output.CondoMap.GetValueOrDefault(info.ProductIndex, 0);
             int scatter = output.ScatterMap.GetValueOrDefault(info.ProductIndex, 0);
             string name = $"{s.Description} {s.Content} {s.PackSize}";
