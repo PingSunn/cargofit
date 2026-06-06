@@ -86,7 +86,8 @@ internal static class PackingEngine
 
         SortStacksByHeight(packInfos, placements, dims);
 
-        // ── Condo ─────────────────────────────────────────────────────────────
+        // ── Condo (ONE wall: complete single-SKU rows CBM bottom-up + remainder on top; kept only if it
+        //    stands within ≤1 step of the innermost block, else every leftover scatters on its own stacks) ──
         PackingLog.Phase("CONDO PLACEMENT");
         if (PackingLog.IsEnabled)
             PackingLog.Info($"CondoStartY={currentY:F1}  available={dims.L - currentY:F1} cm");
@@ -95,7 +96,7 @@ internal static class PackingEngine
             foreach (var (k, v) in condoMap)
                 PackingLog.Info($"  [{k}] {requests[k].Spec.Description} {requests[k].Spec.Content}: condoPlaced={v}");
 
-        // ── Scatter ───────────────────────────────────────────────────────────
+        // ── Scatter (condo overflow / discarded-condo leftovers → piled on own stacks up to the ceiling) ──
         PackingLog.Phase("SCATTER TOP PLACEMENT");
         var scatterMap = RunScatteredTopPlacement(packInfos, dims, placements);
         if (PackingLog.IsEnabled)
@@ -357,90 +358,107 @@ internal static class PackingEngine
     {
         var condoMap = new Dictionary<int,int>();
 
-        var withRem = packInfos
+        // Leftover queue: products with unplaced boxes, highest box-CBM first (heaviest/most-volume
+        // forms the BASE). rem[] tracks how many of each remain.
+        var leftover = packInfos
             .Where(info => info.HasPattern && info.Requested - info.Result.Packed > 0)
             .Select(info => (info, rem: info.Requested - info.Result.Packed))
-            .OrderByDescending(x => x.rem * x.info.Spec.Cbm)
+            .OrderByDescending(x => x.info.Spec.Cbm)
             .ThenByDescending(x => x.info.Spec.H)
+            .ThenByDescending(x => x.rem)
             .ToList();
+        if (leftover.Count == 0) return condoMap;
 
-        if (withRem.Count == 0) return condoMap;
+        var queue = leftover.Select(x => x.info).ToList();
+        var rem   = leftover.Select(x => x.rem).ToArray();
 
-        // Target Z = the height the primary stack adjacent to the condo border
-        // will reach after scatter top-up — i.e. min(MaxLayers, floor(H/spec.H)) × spec.H
-        // of the adjacent product. Using "current TopZ" before scatter would
-        // under-estimate, leaving condo columns >1 layer below primary.
-        // BUG FIX: group by (ProductIndex, StackIndex) — StackIndex is per-product,
-        // not global. Grouping by StackIndex alone merges stacks from different products
-        // (e.g. Mogu320 Stack=1 and Mogu1000 Stack=1 collapse into one group whose
-        // g.First() returns the first-placed product, yielding the wrong adjSpec and
-        // an under-estimated targetCondoZ → fewer condo layers than the container allows).
-        var adjacent = placements
+        // Height cap = top of the innermost primary block (lowest-Y zone = highest total-CBM product
+        // after SortStacksByHeight). The condo must stay within ONE step (≤1 layer) of it so the
+        // back-wall profile stays squared off. Overflow that can't fit under this cap is left in rem
+        // and handled by the scatter phase (piled on top of the product's own stacks).
+        var innermost = placements
             .Where(p => p.StackIndex < CondoStackBase)
-            .GroupBy(p => (p.ProductIndex, p.StackIndex))
-            .Select(g => new { EndY = g.Max(p => p.Y + p.BL), ProductIndex = g.Key.ProductIndex })
-            .OrderByDescending(s => s.EndY)
+            .GroupBy(p => p.ProductIndex)
+            .Select(g => new { MinY = g.Min(p => p.Y), TopZ = g.Max(p => p.Z + p.BH), BoxH = g.Max(p => p.BH) })
+            .OrderBy(s => s.MinY)
             .FirstOrDefault();
-
-        if (adjacent is null) return condoMap;
-
-        // Scatter doesn't honour MaxLayers (it tops up primary stacks until the
-        // container ceiling), so target the same ceiling here. MaxLayers caps
-        // only the primary phase before scatter — it doesn't bound final TopZ.
-        var adjSpec = packInfos[adjacent.ProductIndex].Spec;
-        int adjMaxLayers = (int)Math.Floor(dims.H / adjSpec.H);
-        double targetCondoZ = adjMaxLayers * adjSpec.H;
-
+        if (innermost is null) return condoMap;
+        double targetCondoZ = innermost.TopZ;
         if (targetCondoZ <= 0) return condoMap;
 
-        var colsMap = new int[packInfos.Count];
-        foreach (var (info, _) in withRem)
-            colsMap[info.ProductIndex] = CondoCols(info.Spec, dims);
+        double colDepth = queue.Max(info => info.Spec.L); // wall depth in Y (one box deep)
+        if (condoAreaStart + colDepth > dims.L + 0.01) return condoMap; // no room for a wall → scatter all
 
-        double colDepth = withRem.Max(x => x.info.Spec.L);
-        double condoY   = condoAreaStart;
+        // There is only ONE condo — a single wall (one Y-slice, full container width) against the back
+        // wall, built bottom-up into a temp list and committed only if it stands tall enough (see gate
+        // below). Two phases:
+        //   1. COMPLETE full-width single-SKU rows, bottom-up in CBM order — heaviest product on the
+        //      floor. Each row is one product at a uniform height, so its top is flat and supports the
+        //      next row (no floating, the failure of the old mixed-height rows).
+        //   2. The leftover REMAINDER of every product (boxes that can't complete a full row) is then
+        //      combined into the row(s) on top, again in CBM order left→right.
+        // Both phases stop at the ≤1-step cap (targetCondoZ); anything still unplaced spills to scatter.
+        var condoBoxes = new List<BoxPlacement>();
+        double condoY  = condoAreaStart;
+        double z   = 0;
+        int    row = 0;
 
-        bool HasY() => condoY + colDepth <= dims.L + 0.01;
-        void NextColumn() { condoY += colDepth; }
-
-        foreach (var (info, rem) in withRem)
+        // ── Phase 1: complete single-SKU rows, bottom-up by CBM ──
+        for (int q = 0; q < queue.Count; q++)
         {
-            int cols = colsMap[info.ProductIndex];
-            if (cols <= 0) continue;
+            var spec = queue[q].Spec;
+            if (spec.W > dims.W + 0.01) continue;            // box wider than container → remainder/scatter
+            int perRow = (int)((dims.W + 0.01) / spec.W);    // boxes that fit across the width
+            if (perRow < 1) continue;
 
-            // 1e-9 epsilon guards against float imprecision when targetCondoZ is an
-            // exact multiple of spec.H (e.g. 9×26.7 = 240.299... → ratio = 8.9999...).
-            int targetLayers = Math.Min(
-                (int)Math.Floor(targetCondoZ / info.Spec.H + 1e-9),
-                (int)Math.Floor(dims.H / info.Spec.H));
-            if (targetLayers <= 0) continue;
-
-            int condoCap = cols * targetLayers;
-            if (rem < condoCap) continue;
-
-            int fullColumns = rem / condoCap;
-            int condoSI     = CondoStackBase + info.ProductIndex;
-
-            for (int c = 0; c < fullColumns; c++)
+            while (rem[q] >= perRow && z + spec.H <= targetCondoZ + 0.01)
             {
-                if (!HasY()) break;
-
-                for (int layer = 0; layer < targetLayers; layer++)
-                {
-                    double z = layer * info.Spec.H;
-                    for (int col = 0; col < cols; col++)
-                        placements.Add(new BoxPlacement(
-                            col * info.Spec.W, condoY, z,
-                            info.Spec.W, info.Spec.L, info.Spec.H,
-                            info.ProductIndex, false, condoSI, layer));
-
-                    condoMap[info.ProductIndex] = condoMap.GetValueOrDefault(info.ProductIndex) + cols;
-                }
-
-                NextColumn();
+                for (int c = 0; c < perRow; c++)
+                    condoBoxes.Add(new BoxPlacement(
+                        c * spec.W, condoY, z, spec.W, spec.L, spec.H,
+                        queue[q].ProductIndex, false, CondoStackBase + queue[q].ProductIndex, row));
+                condoMap[queue[q].ProductIndex] = condoMap.GetValueOrDefault(queue[q].ProductIndex) + perRow;
+                rem[q] -= perRow;
+                z += spec.H;
+                row++;
             }
         }
 
+        // ── Phase 2: combine the remainders into the top row(s), CBM order left→right ──
+        double x = 0, rowMaxH = 0;
+        for (int q = 0; q < queue.Count; q++)
+        {
+            var spec = queue[q].Spec;
+            if (spec.W > dims.W + 0.01) continue;
+            while (rem[q] > 0)
+            {
+                if (x + spec.W > dims.W + 0.01) { z += rowMaxH; x = 0; rowMaxH = 0; row++; } // wrap row
+                if (z + spec.H > targetCondoZ + 0.01) break;                                 // cap → overflow→scatter
+                condoBoxes.Add(new BoxPlacement(
+                    x, condoY, z, spec.W, spec.L, spec.H,
+                    queue[q].ProductIndex, false, CondoStackBase + queue[q].ProductIndex, row));
+                condoMap[queue[q].ProductIndex] = condoMap.GetValueOrDefault(queue[q].ProductIndex) + 1;
+                rem[q]--;
+                x += spec.W;
+                rowMaxH = Math.Max(rowMaxH, spec.H);
+            }
+        }
+
+        // ── Gate: build the condo only if it stands CLOSE to the innermost block ──
+        // The condo is worth a back wall only when it rises near the innermost block (within one box
+        // layer of that block's top). If the leftover is too little to raise it that high, a short stub
+        // against the back wall is pointless — discard it entirely and let EACH leftover pile on top of
+        // its OWN product's stacks (scatter). User rule (2026-06): "ถ้า condo ทำให้สูงใกล้เคียง block แรก
+        // ไม่ได้ ให้เอาเศษแต่ละอันไปวางบน stack ของสินค้านั้น ๆ" + "condo จะมีแค่อันเดียว".
+        if (condoBoxes.Count == 0) return condoMap;
+        double condoTopZ = condoBoxes.Max(p => p.Z + p.BH);
+        if (targetCondoZ - condoTopZ > innermost.BoxH + 0.01)
+        {
+            condoMap.Clear();
+            return condoMap; // not tall enough → every leftover scatters onto its own stacks
+        }
+
+        placements.AddRange(condoBoxes);
         return condoMap;
     }
 
@@ -457,6 +475,16 @@ internal static class PackingEngine
             int rem         = info.Requested - placedSoFar;
             if (rem <= 0) continue;
 
+            // Scatter tops up the product's OWN stacks shortest-first (keeps them within ±1 layer).
+            // Condo overflow (boxes that didn't fit under the ≤1-step cap) AND the leftovers of a
+            // discarded condo (a wall too short to stand near the innermost block) are piled here on top
+            // of the stacks, filling the empty space up to the CEILING. MaxLayers is intentionally NOT
+            // enforced — the user's rule is "if the condo can't stand near block-1, put each leftover on
+            // top of its own stack" — so nothing drops while the container still has headroom.
+            int ceilLayers  = (int)Math.Floor(dims.H / info.Spec.H);
+            int maxLayerCap = ceilLayers;
+            if (maxLayerCap <= 0) continue;
+
             var stacks = placements
                 .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase)
                 .GroupBy(p => p.StackIndex)
@@ -464,7 +492,7 @@ internal static class PackingEngine
                     SI:       g.Key,
                     StackY:   g.Min(p => p.Y),
                     TopLayer: g.Max(p => p.LayerIndex) + 1))
-                .Where(s => s.TopLayer * info.Spec.H + info.Spec.H <= dims.H + 0.01)
+                .Where(s => s.TopLayer < maxLayerCap && s.TopLayer * info.Spec.H + info.Spec.H <= dims.H + 0.01)
                 .Select(s => new ScatterStack(s.SI, s.StackY, s.TopLayer, s.TopLayer * info.Spec.H))
                 .ToList();
 
@@ -496,7 +524,7 @@ internal static class PackingEngine
 
                 int    nextLayer = s.TopLayer + 1;
                 double nextZ     = s.TopZ + info.Spec.H;
-                if (nextZ + info.Spec.H > dims.H + 0.01)
+                if (nextLayer >= maxLayerCap || nextZ + info.Spec.H > dims.H + 0.01)
                     stacks.RemoveAt(pick);
                 else
                     stacks[pick] = new ScatterStack(s.SI, s.StackY, nextLayer, nextZ);
@@ -545,8 +573,16 @@ internal static class PackingEngine
 
     private record struct ScatterStack(int SI, double StackY, int TopLayer, double TopZ);
 
+    // A pinwheel pattern = exactly one pinwheel section (the 4-box windmill square unit).
+    // Detected here so the two pattern funnels (LayerDepth + PlaceLayerAt) can branch; every other
+    // consumer (PlaceProduct, balancing, scatter) routes through those and needs no change.
+    private static bool IsPinwheel(LayerSection[] sections) =>
+        sections.Length == 1 && sections[0].Pinwheel;
+
     private static double LayerDepth(LayerSection[] sections, double W, double L)
     {
+        if (IsPinwheel(sections)) return W + L;   // one stack = one (W+L)-deep square slice
+
         double max = 0;
         foreach (var s in sections)
         {
@@ -589,14 +625,14 @@ internal static class PackingEngine
 
         int fullBpl = CountLayerCapacity(spec.PatternA, spec, dims, startY);
 
-        // If the product supports condo, cap primary at floor(requested / fullStack) stacks.
+        // Cap primary at floor(requested / fullStack) FULL stacks for every patterned product.
         // A partial last stack would consume a full stack-depth slot while only holding a
-        // fraction of boxes — the remainder is better handled by condo (compact column at
-        // condoAreaStart) than by opening another primary slot.  Without this cap, the
-        // first-placed product greedily occupies one extra stack-depth that the second
-        // product could have used, causing the second product to run short.
+        // fraction of boxes — the remainder is better handled by condo (compact, at the innermost
+        // wall) than by opening another primary slot. Without this cap the first-placed product
+        // greedily occupies one extra stack-depth that the next product could have used, causing
+        // it to run short. (Applies to all products now — no longer gated by CondoCount.)
         int maxStacks = int.MaxValue;
-        if (spec.CondoCount > 0 && fullBpl > 0 && layerLimit > 0)
+        if (fullBpl > 0 && layerLimit > 0)
         {
             int fullStackBoxes = fullBpl * layerLimit;
             maxStacks = Math.Max(1, requested / fullStackBoxes); // floor division
@@ -649,6 +685,9 @@ internal static class PackingEngine
     {
         if (z + spec.H > dims.H + 0.01) return -1;
 
+        if (IsPinwheel(sections))
+            return PlacePinwheelLayer(spec, dims, stackY, z, limit, productIndex, placements, stackIndex, layerIndex);
+
         static double SectionWidth(LayerSection s, double w, double l) =>
             s.GetSubRows().Max(sub => sub.Cols * (sub.Rotated ? l : w));
 
@@ -691,6 +730,47 @@ internal static class PackingEngine
         return packed > 0 ? packed : -1;
     }
 
+    // Places one layer of pinwheel "windmill" units across the container width. Four boxes per
+    // unit — each rotated 90° from the next — form a (W+L)×(W+L) square with a small |L−W| centre
+    // gap. Units tile along X; one full layer is floor(W_container / (W+L)) units. `limit` is
+    // honoured so condo/scatter callers can place a partial count. Returns boxes placed, or -1.
+    private static int PlacePinwheelLayer(
+        ProductSpec spec, ContainerDims dims, double stackY, double z, int limit,
+        int productIndex, List<BoxPlacement> placements, int stackIndex, int layerIndex)
+    {
+        double w = spec.W, l = spec.L, side = w + l;
+        int unitsAcross = (int)((dims.W + 0.01) / side);
+        if (unitsAcross < 1) return -1;
+
+        // (dx, dy, rotated) of each box relative to the unit's near-left corner. Rotated boxes lie
+        // with their long side (L) along X; non-rotated keep W along X. The four offsets interlock
+        // into the square (centre gap = |L−W|, here unfilled).
+        var motif = new (double dx, double dy, bool rot)[]
+        {
+            (0, 0, true),   // bottom: L wide × W deep
+            (l, 0, false),  // right : W wide × L deep
+            (w, l, true),   // top   : L wide × W deep
+            (0, w, false),  // left  : W wide × L deep
+        };
+
+        int placed = 0;
+        for (int u = 0; u < unitsAcross && placed < limit; u++)
+        {
+            double ox = u * side;
+            foreach (var (dx, dy, rot) in motif)
+            {
+                if (placed >= limit) break;
+                double bw = rot ? l : w;
+                double bl = rot ? w : l;
+                double px = ox + dx, py = stackY + dy;
+                if (px + bw > dims.W + 0.01 || py + bl > dims.L + 0.01) continue;
+                placements.Add(new BoxPlacement(px, py, z, bw, bl, spec.H, productIndex, rot, stackIndex, layerIndex));
+                placed++;
+            }
+        }
+        return placed > 0 ? placed : -1;
+    }
+
     private static int[] ComputeEffectiveLayers(
         ContainerDims dims, IReadOnlyList<(ProductSpec Spec, int Qty)> requests)
     {
@@ -717,7 +797,7 @@ internal static class PackingEngine
         double targetY = dims.L - 50.0;
         if (totalY <= 0 || totalY >= targetY) return eff;
         int activeCount = data.Count(d => d.bpl > 0 && d.sd > 0 && d.stacks > 0);
-        if (activeCount >= 2)
+        if (activeCount >= 1)
         {
             // Full layers placeable per product (floor: only complete layers count).
             var totalLayers = new int[n];
@@ -760,24 +840,7 @@ internal static class PackingEngine
             return eff;
         }
 
-        double scale = targetY / totalY;
-        for (int i = 0; i < n; i++)
-        {
-            var (bpl, sd, stacks) = data[i];
-            if (bpl <= 0 || sd <= 0 || stacks <= 0) continue;
-
-            // Count stacks that fit without Y-clipping — same guard as PlaceProduct.
-            int maxFull = 0;
-            for (double y = 0; y < dims.L; y += sd)
-            {
-                if (CountLayerCapacity(requests[i].Spec.PatternA!, requests[i].Spec, dims, y) < bpl) break;
-                maxFull++;
-            }
-
-            int newStacks = Math.Min((int)Math.Ceiling(stacks * scale), maxFull > 0 ? maxFull : stacks);
-            int newL      = (int)Math.Ceiling((double)requests[i].Qty / (newStacks * bpl));
-            eff[i] = Math.Max(1, Math.Min(newL, eff[i]));
-        }
+        // No active pattern products — nothing to scale.
         return eff;
     }
 
@@ -849,61 +912,64 @@ internal static class PackingEngine
     private static void SortStacksByHeight(
         List<PackInfo> packInfos, List<BoxPlacement> placements, ContainerDims dims)
     {
-        // Global sort: collect ALL primary stacks across every product and sort by height
-        // descending so that stacks of similar height (regardless of product) cluster together.
-        // Tall stacks → lowest Y (innermost / back wall); short stacks → toward door.
-        var patternProducts = packInfos.Where(x => x.HasPattern).Select(x => x.ProductIndex).ToHashSet();
-
-        var allStacks = placements
-            .Where(p => p.StackIndex < CondoStackBase && patternProducts.Contains(p.ProductIndex))
-            .GroupBy(p => (p.ProductIndex, p.StackIndex))
-            .Select(g => (
-                Key:    g.Key,
-                Height: g.Max(p => p.LayerIndex) + 1,
-                MinY:   g.Min(p => p.Y),
-                Depth:  g.Max(p => p.Y + p.BL) - g.Min(p => p.Y)
-            ))
-            .OrderBy(s => s.MinY)   // deterministic original order
+        // Zone ordering: product with highest total CBM (qty × box CBM) goes innermost (back wall).
+        // This matches real loading practice — heaviest/most-volume product loaded first.
+        // Within each zone: stacks sorted by physical height DESC so the global profile
+        // forms a staircase with each adjacent pair differing by ≈ 1 box layer.
+        var zones = packInfos
+            .Where(info => info.HasPattern)
+            .Select(info =>
+            {
+                var boxes = placements
+                    .Where(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase)
+                    .ToList();
+                return (ProductIndex: info.ProductIndex, Boxes: boxes, TotalCbm: info.Spec.Cbm * info.Requested);
+            })
+            .Where(x => x.Boxes.Count > 0)
+            .Select(x =>
+            {
+                var stacks = x.Boxes
+                    .GroupBy(p => p.StackIndex)
+                    .Select(g => (
+                        SI:    g.Key,
+                        PhysH: g.Max(p => p.Z + p.BH),
+                        MinY:  g.Min(p => p.Y),
+                        Depth: g.Max(p => p.Y + p.BL) - g.Min(p => p.Y)
+                    ))
+                    .OrderByDescending(s => s.PhysH)
+                    .ToList();
+                return (
+                    ProductIndex: x.ProductIndex,
+                    ZoneMinY:     x.Boxes.Min(p => p.Y),
+                    ZoneDepth:    x.Boxes.Max(p => p.Y + p.BL) - x.Boxes.Min(p => p.Y),
+                    TotalCbm:     x.TotalCbm,
+                    Stacks:       stacks
+                );
+            })
+            .OrderByDescending(z => z.TotalCbm)
             .ToList();
 
-        if (allStacks.Count < 2) return;
+        if (zones.Count == 0) return;
 
-        var sorted = allStacks
-            .OrderByDescending(s => s.Height)
-            .ThenBy(s => s.MinY)    // stable tie-break preserves original order within equal heights
-            .ToList();
-
-        if (allStacks.Select(s => s.Key).SequenceEqual(sorted.Select(s => s.Key))) return;
-
-        // Repack Y from scratch: assign new start positions in sorted (tall-first) order.
-        // Each stack keeps its own depth; only its start Y changes.
-        var newMinYMap = new Dictionary<(int, int), double>();
-        double y = 0;
-        foreach (var stack in sorted)
+        // Start from the earliest Y of all patterned zones, pack zones contiguously in CBM order.
+        double curY = zones.Min(z => z.ZoneMinY);
+        var stackYMap = new Dictionary<(int ProductIndex, int StackIndex), (double OrigMinY, double NewMinY)>();
+        foreach (var zone in zones)
         {
-            if (Math.Abs(y - stack.MinY) > 0.001)
-                newMinYMap[stack.Key] = y;
-            y += stack.Depth;
+            foreach (var stack in zone.Stacks)
+            {
+                stackYMap[(zone.ProductIndex, stack.SI)] = (stack.MinY, curY);
+                curY += stack.Depth;
+            }
         }
-
-        if (newMinYMap.Count == 0) return;
 
         for (int j = 0; j < placements.Count; j++)
         {
             var p = placements[j];
             if (p.StackIndex >= CondoStackBase) continue;
-            if (!newMinYMap.TryGetValue((p.ProductIndex, p.StackIndex), out double newMinY)) continue;
-            double oldMinY = allStacks.First(s => s.Key == (p.ProductIndex, p.StackIndex)).MinY;
-            placements[j] = p with { Y = newMinY + (p.Y - oldMinY) };
+            if (!stackYMap.TryGetValue((p.ProductIndex, p.StackIndex), out var yInfo)) continue;
+            if (Math.Abs(yInfo.NewMinY - yInfo.OrigMinY) < 0.001) continue;
+            placements[j] = p with { Y = yInfo.NewMinY + (p.Y - yInfo.OrigMinY) };
         }
-    }
-
-    // Returns a sortable magnitude from content strings like "1000 ML", "450 ML", "150 G", "19.5 G".
-    private static int CondoCols(ProductSpec spec, ContainerDims dims)
-    {
-        int condoCount = spec.CondoCount > 0
-            ? spec.CondoCount
-            : (int)Math.Floor(dims.W / spec.W);
-        return Math.Min(condoCount, (int)Math.Floor(dims.W / spec.W));
     }
 }

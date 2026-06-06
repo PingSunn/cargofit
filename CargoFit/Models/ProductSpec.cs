@@ -12,7 +12,12 @@ public record SectionSubRow(int Rows, int Cols, bool Rotated);
 // One rectangular section within a layer, placed left-to-right with other sections.
 // SubRows overrides Rows/Cols/Rotated when non-empty (multi-orientation section).
 // Rows/Cols/Rotated are kept for backward-compatible JSON deserialization of legacy data.
-public record LayerSection(int Rows, int Cols, bool Rotated, SectionSubRow[]? SubRows = null)
+// Pinwheel: when true, this section is a 4-box "windmill" unit whose footprint squares off to
+// (W+L)×(W+L) — four boxes each rotated 90° from the next, with a small |L−W| centre gap. A
+// pinwheel pattern is a PatternA of exactly ONE pinwheel section (not mixed with grid sections);
+// the engine tiles the unit across the container width. Rows/Cols/Rotated/SubRows are ignored
+// when Pinwheel is true. (New optional field → old JSON without it deserializes to false.)
+public record LayerSection(int Rows, int Cols, bool Rotated, SectionSubRow[]? SubRows = null, bool Pinwheel = false)
 {
     public SectionSubRow[] GetSubRows() =>
         SubRows is { Length: > 0 }

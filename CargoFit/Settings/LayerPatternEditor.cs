@@ -123,7 +123,7 @@ public class LayerPatternEditor : UserControl
     private sealed class SectionRow
     {
         public Border Card { get; }
-        public int TotalBoxes => _subRows.Sum(r => r.Rows * r.Cols);
+        public int TotalBoxes => _pinwheel ? 4 : _subRows.Sum(r => r.Rows * r.Cols);
 
         private readonly List<SubRowEntry> _subRows = [];
         private readonly Action _onChange;
@@ -132,9 +132,12 @@ public class LayerPatternEditor : UserControl
         private Canvas     _preview      = null!;
         private double     _boxW;
         private double     _boxL;
+        private bool       _pinwheel;    // 4-box windmill square unit (ignores sub-rows)
 
         public LayerSection ToSection()
         {
+            if (_pinwheel) return new LayerSection(0, 0, false, Pinwheel: true);
+
             var subs = _subRows.Select(r => new SectionSubRow(r.Rows, r.Cols, r.Rotated)).ToArray();
             // Single sub-row: write legacy format so existing JSON stays clean
             return subs.Length == 1
@@ -179,7 +182,26 @@ public class LayerPatternEditor : UserControl
                 DrawPreview();
                 _onChange();
             };
-            footerGrid.Children.Add(addSubBtn);
+
+            // Pinwheel toggle: when on, the section is a 4-box windmill square (sub-rows hidden).
+            var pinBtn = new Button
+            {
+                FontSize = 11,
+                Padding  = new Thickness(8, 4),
+                Classes  = { "ghost" }
+            };
+            void ApplyPinwheel()
+            {
+                _subRowsPanel.IsVisible = !_pinwheel;
+                addSubBtn.IsVisible     = !_pinwheel;
+                pinBtn.Content          = _pinwheel ? "▦ กังหัน: เปิด" : "▦ กังหัน: ปิด";
+            }
+            pinBtn.Click += (_, _) => { _pinwheel = !_pinwheel; ApplyPinwheel(); DrawPreview(); _onChange(); };
+
+            var leftButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            leftButtons.Children.Add(addSubBtn);
+            leftButtons.Children.Add(pinBtn);
+            footerGrid.Children.Add(leftButtons);
 
             var delSectionBtn = new Button
             {
@@ -199,8 +221,13 @@ public class LayerPatternEditor : UserControl
             inner.Children.Add(_preview);
 
             // Init sub-rows after _preview is assigned
-            foreach (var sub in s.GetSubRows())
-                AddSubRowEntry(sub);
+            _pinwheel = s.Pinwheel;
+            if (_pinwheel)
+                AddSubRowEntry(new SectionSubRow(2, 4, false)); // sensible grid default if toggled off
+            else
+                foreach (var sub in s.GetSubRows())
+                    AddSubRowEntry(sub);
+            ApplyPinwheel();
             DrawPreview();
 
             return new Border
@@ -255,6 +282,7 @@ public class LayerPatternEditor : UserControl
         private void DrawPreview()
         {
             _preview.Children.Clear();
+            if (_pinwheel) { DrawPinwheelPreview(); return; }
             if (_subRows.Count == 0) return;
 
             double totalH = _subRows.Sum(r => r.Rows * (r.Rotated ? _boxW : _boxL));
@@ -289,6 +317,40 @@ public class LayerPatternEditor : UserControl
                     }
                 }
                 drawY += sub.Rows * cellH;
+            }
+        }
+
+        // Draws the 4-box windmill: each box rotated 90° from the next, squaring off to (W+L)².
+        private void DrawPinwheelPreview()
+        {
+            double w = _boxW, l = _boxL, side = w + l;
+            if (side <= 0) return;
+            double scale = 80.0 / side;
+
+            var motif = new (double dx, double dy, bool rot)[]
+            {
+                (0, 0, true),   // bottom
+                (l, 0, false),  // right
+                (w, l, true),   // top
+                (0, w, false),  // left
+            };
+
+            foreach (var (dx, dy, rot) in motif)
+            {
+                double cellW = (rot ? l : w) * scale;
+                double cellH = (rot ? w : l) * scale;
+                var rect = new Border
+                {
+                    Width           = Math.Max(cellW - 2, 1),
+                    Height          = Math.Max(cellH - 2, 1),
+                    Background      = rot ? ThemeColors.BoxRotated : ThemeColors.BoxNormal,
+                    BorderBrush     = Brushes.White,
+                    BorderThickness = new Thickness(1),
+                    CornerRadius    = new CornerRadius(2)
+                };
+                Canvas.SetLeft(rect, dx * scale + 1);
+                Canvas.SetTop(rect,  dy * scale + 1);
+                _preview.Children.Add(rect);
             }
         }
 
