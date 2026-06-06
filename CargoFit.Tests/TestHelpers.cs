@@ -9,9 +9,9 @@ internal static class TestHelpers
 {
     // ── Containers ───────────────────────────────────────────────────────────
 
-    internal static ContainerSpec Container20ft()  => new("ตู้สั้น",     "20 ft",    244, 600,  259, Gap: 10);
-    internal static ContainerSpec Container40ft()  => new("ตู้ยาว",     "40 ft",    244, 1209, 260, Gap: 10);
-    internal static ContainerSpec Container40HC()  => new("ตู้ไฮคิวบ์", "40 ft HC", 244, 1203, 290, Gap: 10);
+    internal static ContainerSpec Container20ft()  => new("ตู้สั้น",     "20 ft",    244, 600,  259, 235, 586,  238, MaxWeightTons: 0, MaxVolumeCbm: 33);
+    internal static ContainerSpec Container40ft()  => new("ตู้ยาว",     "40 ft",    244, 1209, 260, 235, 1203, 238, MaxWeightTons: 0,  MaxVolumeCbm: 67.5);
+    internal static ContainerSpec Container40HC()  => new("ตู้ไฮคิวบ์", "40 ft HC", 244, 1203, 290, 235, 1203, 270, MaxWeightTons: 0,  MaxVolumeCbm: 76.2);
 
     // ── Shared product specs (used across multiple test files) ───────────────
 

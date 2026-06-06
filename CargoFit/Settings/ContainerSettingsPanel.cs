@@ -14,7 +14,12 @@ internal sealed class ContainerSettingsPanel : UserControl
     private StackPanel _rowsPanel = null!;
     private readonly List<EditRow> _editRows = [];
 
-    private record EditRow(TextBox Name, TextBox SizeLabel, TextBox W, TextBox L, TextBox H, TextBox Gap, Border Card, TextBlock Hint);
+    private record EditRow(
+        TextBox Name, TextBox SizeLabel,
+        TextBox W, TextBox L, TextBox H,
+        TextBox IW, TextBox IL, TextBox IH,
+        TextBox MaxWeight, TextBox MaxVol,
+        Border Card, TextBlock Hint);
 
     public ContainerSettingsPanel()
     {
@@ -55,7 +60,7 @@ internal sealed class ContainerSettingsPanel : UserControl
 
         var subtitle = new TextBlock
         {
-            Text = "ใส่ขนาดจริงของตู้ — ระบบจะลบค่า Gap จากทุกด้านเพื่อคำนวณพื้นที่ใช้งาน",
+            Text = "ใส่ขนาดตู้จริง และขนาดภายใน (ช่องที่ระบบใช้คำนวณการจัดวาง) — น้ำหนัก/ปริมาตรสูงสุด ใส่ 0 = ไม่จำกัด",
             FontSize = 13,
             Foreground = ThemeColors.InkMuted,
             Margin = new Avalonia.Thickness(0, 6, 0, 0),
@@ -143,60 +148,66 @@ internal sealed class ContainerSettingsPanel : UserControl
 
         inner.Children.Add(row1);
 
-        var row2 = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,8,*,8,*") };
-
-        TextBox MakeDimBox(string val, string label, int col)
+        TextBox MakeDimBox(Grid target, string val, string label, int col)
         {
             var stack = new StackPanel { Spacing = 4 };
-            stack.Children.Add(new TextBlock { Text = label.ToUpperInvariant(), FontSize = 11, FontWeight = FontWeight.Medium, Foreground = ThemeColors.InkFaint });
+            stack.Children.Add(new TextBlock { Text = label, FontSize = 11, FontWeight = FontWeight.Medium, Foreground = ThemeColors.InkFaint });
             var box = new TextBox { Text = val };
             stack.Children.Add(box);
             Grid.SetColumn(stack, col);
-            row2.Children.Add(stack);
+            target.Children.Add(stack);
             return box;
         }
 
-        var wBox = MakeDimBox(spec?.NominalW.ToString() ?? "0", "Width (cm)", 0);
-        var lBox = MakeDimBox(spec?.NominalL.ToString() ?? "0", "Length (cm)", 2);
-        var hBox = MakeDimBox(spec?.NominalH.ToString() ?? "0", "Height (cm)", 4);
+        TextBlock SectionLabel(string text) => new()
+        {
+            Text = text,
+            FontSize = 12,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = ThemeColors.InkMuted,
+        };
 
+        // ── Nominal (real) size — drawn as the 3D shell ──────────────────────
+        inner.Children.Add(SectionLabel("ขนาดตู้ (cm)"));
+        var row2 = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,8,*,8,*") };
+        var wBox = MakeDimBox(row2, spec?.NominalW.ToString() ?? "0", "WIDTH", 0);
+        var lBox = MakeDimBox(row2, spec?.NominalL.ToString() ?? "0", "LENGTH", 2);
+        var hBox = MakeDimBox(row2, spec?.NominalH.ToString() ?? "0", "HEIGHT", 4);
         inner.Children.Add(row2);
 
-        var row3 = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("Auto,8,80") };
-        row3.Children.Add(new TextBlock
-        {
-            Text = "GAP (CM)",
-            FontSize = 11,
-            FontWeight = FontWeight.Medium,
-            Foreground = ThemeColors.InkFaint,
-            VerticalAlignment = VerticalAlignment.Center
-        });
-        var gapBox = new TextBox { Text = (spec?.Gap ?? 5).ToString() };
-        Grid.SetColumn(gapBox, 2);
-        row3.Children.Add(gapBox);
+        // ── Interior (usable) size — what packing actually uses ──────────────
+        inner.Children.Add(SectionLabel("ขนาดภายใน (cm) · ใช้คำนวณ"));
+        var row3 = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,8,*,8,*") };
+        var iwBox = MakeDimBox(row3, spec?.InteriorW.ToString() ?? "0", "WIDTH", 0);
+        var ilBox = MakeDimBox(row3, spec?.InteriorL.ToString() ?? "0", "LENGTH", 2);
+        var ihBox = MakeDimBox(row3, spec?.InteriorH.ToString() ?? "0", "HEIGHT", 4);
         inner.Children.Add(row3);
+
+        // ── Rated limits (0 = ไม่จำกัด) ──────────────────────────────────────
+        var row4 = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,8,*") };
+        var wtBox  = MakeDimBox(row4, (spec?.MaxWeightTons ?? 0).ToString(), "น้ำหนักสูงสุด (ตัน · 0=ไม่จำกัด)", 0);
+        var volBox = MakeDimBox(row4, (spec?.MaxVolumeCbm ?? 0).ToString(),  "ปริมาตรสูงสุด (CBM · 0=ไม่จำกัด)", 2);
+        inner.Children.Add(row4);
 
         var hint = new TextBlock { FontSize = 12, Foreground = ThemeColors.InkFaint };
 
         void UpdateHint()
         {
-            int.TryParse(wBox.Text, out var w);
-            int.TryParse(lBox.Text, out var l);
-            int.TryParse(hBox.Text, out var h);
-            int.TryParse(gapBox.Text, out var gap);
-            hint.Text = $"ภายใน: {w - gap} × {l - gap} × {h - gap} cm";
+            int.TryParse(iwBox.Text, out var iw);
+            int.TryParse(ilBox.Text, out var il);
+            int.TryParse(ihBox.Text, out var ih);
+            hint.Text = $"ปริมาตรภายใน: {iw * il * (double)ih / 1_000_000.0:F2} CBM";
         }
 
-        wBox.TextChanged += (_, _) => UpdateHint();
-        lBox.TextChanged += (_, _) => UpdateHint();
-        hBox.TextChanged += (_, _) => UpdateHint();
-        gapBox.TextChanged += (_, _) => UpdateHint();
+        iwBox.TextChanged += (_, _) => UpdateHint();
+        ilBox.TextChanged += (_, _) => UpdateHint();
+        ihBox.TextChanged += (_, _) => UpdateHint();
         UpdateHint();
 
         inner.Children.Add(hint);
         card.Child = inner;
 
-        var row = new EditRow(nameBox, sizeBox, wBox, lBox, hBox, gapBox, card, hint);
+        var row = new EditRow(nameBox, sizeBox, wBox, lBox, hBox, iwBox, ilBox, ihBox, wtBox, volBox, card, hint);
         _editRows.Add(row);
 
         delBtn.Click += (_, _) =>
@@ -273,9 +284,16 @@ internal sealed class ContainerSettingsPanel : UserControl
             int.TryParse(row.W.Text, out var w);
             int.TryParse(row.L.Text, out var l);
             int.TryParse(row.H.Text, out var h);
-            int.TryParse(row.Gap.Text, out var gap);
-            if (gap <= 0) gap = 5;
-            specs.Add(new ContainerSpec(row.Name.Text.Trim(), row.SizeLabel.Text?.Trim() ?? "", w, l, h, gap));
+            int.TryParse(row.IW.Text, out var iw);
+            int.TryParse(row.IL.Text, out var il);
+            int.TryParse(row.IH.Text, out var ih);
+            double.TryParse(row.MaxWeight.Text, out var maxWeight);
+            double.TryParse(row.MaxVol.Text, out var maxVol);
+            // Blank interior falls back to nominal so a half-filled row never yields a 0-sized container.
+            if (iw <= 0) iw = w;
+            if (il <= 0) il = l;
+            if (ih <= 0) ih = h;
+            specs.Add(new ContainerSpec(row.Name.Text.Trim(), row.SizeLabel.Text?.Trim() ?? "", w, l, h, iw, il, ih, maxWeight, maxVol));
         }
         return specs;
     }

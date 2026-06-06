@@ -185,13 +185,15 @@ public class IsometricCanvas : Control
             return da.CompareTo(db);
         });
 
-        // Shift boxes by Gap/2 so the gap is split evenly between both walls on each axis
-        double gapHalf = Container.Gap / 2.0;
-        if (gapHalf > 0.001)
+        // Centre the interior contents within the nominal shell: split the per-axis gap
+        // (Nominal − Interior) evenly between the two walls on each axis.
+        double gapHalfX = (Container.NominalW - Container.InteriorW) / 2.0;
+        double gapHalfY = (Container.NominalL - Container.InteriorL) / 2.0;
+        if (gapHalfX > 0.001 || gapHalfY > 0.001)
             for (int i = 0; i < clipped.Count; i++)
             {
                 var b = clipped[i];
-                clipped[i] = b with { X = b.X + gapHalf, Y = b.Y + gapHalf };
+                clipped[i] = b with { X = b.X + gapHalfX, Y = b.Y + gapHalfY };
             }
 
         Dictionary<double, int>? zLayerMap = null;
@@ -223,8 +225,8 @@ public class IsometricCanvas : Control
         if (_showDimensions)
         {
             CanvasLabelRenderer.DrawEdgeLabels(context, cW, cL, cH, proj);
-            var labPlacements = gapHalf > 0.001
-                ? Placements.Select(p => p with { Y = p.Y + gapHalf }).ToList()
+            var labPlacements = gapHalfY > 0.001
+                ? Placements.Select(p => p with { Y = p.Y + gapHalfY }).ToList()
                 : (IReadOnlyList<BoxPlacement>)Placements;
             CanvasLabelRenderer.DrawStackWidthLabel(context, labPlacements, proj, cW, bounds);
         }

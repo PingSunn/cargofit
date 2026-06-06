@@ -1,26 +1,38 @@
 [
   {
-    "Name": "\u0E15\u0E39\u0E49\u0E2A\u0E31\u0E49\u0E19",
+    "Name": "ตู้สั้น",
     "SizeLabel": "20 ft",
     "NominalW": 244,
     "NominalL": 600,
     "NominalH": 259,
-    "Gap": 10
+    "InteriorW": 235,
+    "InteriorL": 586,
+    "InteriorH": 238,
+    "MaxWeightTons": 0,
+    "MaxVolumeCbm": 33
   },
   {
-    "Name": "\u0E15\u0E39\u0E49\u0E22\u0E32\u0E27",
+    "Name": "ตู้ยาว",
     "SizeLabel": "40 ft",
     "NominalW": 244,
     "NominalL": 1209,
     "NominalH": 260,
-    "Gap": 10
+    "InteriorW": 235,
+    "InteriorL": 1203,
+    "InteriorH": 238,
+    "MaxWeightTons": 0,
+    "MaxVolumeCbm": 67.5
   },
   {
-    "Name": "\u0E15\u0E39\u0E49\u0E44\u0E2E\u0E04\u0E34\u0E27\u0E1A\u0E4C",
+    "Name": "ตู้ไฮคิวบ์",
     "SizeLabel": "40 ft HC",
     "NominalW": 244,
     "NominalL": 1203,
     "NominalH": 290,
-    "Gap": 10
+    "InteriorW": 235,
+    "InteriorL": 1203,
+    "InteriorH": 270,
+    "MaxWeightTons": 0,
+    "MaxVolumeCbm": 76.2
   }
 ]

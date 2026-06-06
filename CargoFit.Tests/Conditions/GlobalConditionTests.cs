@@ -7,8 +7,9 @@ using Xunit.Abstractions;
 namespace CargoFit.Tests.Conditions;
 
 /// <summary>
-/// Global loading condition — single check: the cargo must fill the container deep enough that the
-/// free space left at the DOOR is ≤ 50 cm. (Y = depth: 0 = innermost/back wall, high = door.)
+/// Global loading conditions asserted for every case in <see cref="TestHelpers.Cases"/>:
+///   1. Free space left at the DOOR ≤ 50 cm (Y = depth: 0 = innermost/back wall, high = door).
+///   2. Total packed volume ≤ the container's rated max volume (MaxVolumeCbm; 0 = ignore).
 /// </summary>
 public class GlobalConditionTests(ITestOutputHelper log)
 {
@@ -36,5 +37,29 @@ public class GlobalConditionTests(ITestOutputHelper log)
 
         Assert.True(freeDoor <= MaxFreeDoorSpaceCm + 0.01,
             $"[{label}] free door space {freeDoor:F1}cm exceeds {MaxFreeDoorSpaceCm:F0}cm");
+    }
+
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public void PackedVolume_WithinContainerMax(string label)
+    {
+        var c = TestHelpers.Cases().First(x => x.Label == label);
+
+        var output = PackingEngine.Calculate(c.Container, c.Requests);
+        log.WriteLine($"--- {label} ---");
+        TestHelpers.DumpOutput(c.Container, c.Requests, output, log);
+
+        double maxCbm = c.Container.MaxVolumeCbm;
+        if (maxCbm <= 0)
+        {
+            log.WriteLine("  MaxVolumeCbm = 0 → ignored (no volume limit set)");
+            return;   // 0 = ignore, per the container-limit convention
+        }
+
+        double usedCbm = output.Placements.Sum(p => p.BW * p.BL * p.BH / 1_000_000.0);
+        log.WriteLine($"  packed volume = {usedCbm:F3} CBM  (max {maxCbm:F2} CBM)");
+
+        Assert.True(usedCbm <= maxCbm + 0.01,
+            $"[{label}] packed volume {usedCbm:F3} CBM exceeds container max {maxCbm:F2} CBM");
     }
 }
