@@ -19,6 +19,23 @@
             BorderBrush="#1E293B">
       <Grid ColumnDefinitions="*,Auto,*" Margin="16,0">
 
+        <!-- Top-level mode nav -->
+        <StackPanel Grid.Column="0"
+                    Orientation="Horizontal"
+                    Spacing="6"
+                    VerticalAlignment="Center">
+          <Button x:Name="NavPlanning"
+                  Content="วางแผน"
+                  Padding="16,6"
+                  CornerRadius="8"
+                  Click="NavPlanning_Click" />
+          <Button x:Name="NavInterlock"
+                  Content="ออกแบบการเรียง"
+                  Padding="16,6"
+                  CornerRadius="8"
+                  Click="NavInterlock_Click" />
+        </StackPanel>
+
         <TextBlock Grid.Column="1"
                    Text="CargoFit"
                    HorizontalAlignment="Center"

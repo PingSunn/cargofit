@@ -722,6 +722,31 @@ internal static class PackingEngine
         return n < 0 ? 0 : n;
     }
 
+    // Exposed for InterlockDesigner + tests: how many boxes one layer of `sections` actually places
+    // for a box of the given dimensions across a container of interior width `containerW` (depth and
+    // height left effectively unbounded). Routes through the same PlaceLayerAt that real packing uses,
+    // so a candidate pattern is scored/verified by the exact placement logic.
+    internal static int LayerBoxCount(LayerSection[] sections, double w, double l, double h, double containerW)
+    {
+        if (sections is not { Length: > 0 } || w <= 0 || l <= 0 || containerW <= 0) return 0;
+        var spec = new ProductSpec("", "", "", 0, w, l, h);
+        var dims = new ContainerDims(containerW, 1e9, 1e9);
+        return CountLayerCapacity(sections, spec, dims, 0.0);
+    }
+
+    // Exposed for the Interlock Designer preview: the actual box placements of ONE layer of `sections`
+    // (at z=0, stackY=0) for a box of the given dimensions across `containerW`. Each placement carries
+    // X (width), Y (depth), BW/BL and the Rotated flag — enough to draw an accurate top view.
+    internal static List<BoxPlacement> LayerPlacements(LayerSection[] sections, double w, double l, double h, double containerW)
+    {
+        var list = new List<BoxPlacement>();
+        if (sections is not { Length: > 0 } || w <= 0 || l <= 0 || containerW <= 0) return list;
+        var spec = new ProductSpec("", "", "", 0, w, l, h);
+        var dims = new ContainerDims(containerW, 1e9, 1e9);
+        PlaceLayerAt(sections, spec, dims, 0.0, 0.0, int.MaxValue, 0, list, 0, 0);
+        return list;
+    }
+
     private static PlaceResult PlaceProduct(
         ContainerDims dims, ProductSpec spec, int requested,
         double startY, int productIndex, List<BoxPlacement> placements,
