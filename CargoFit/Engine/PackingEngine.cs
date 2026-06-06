@@ -59,15 +59,24 @@ internal static class PackingEngine
         if (PackingLog.IsEnabled)
             PackingLog.Info($"EffectiveLayers: {string.Join("  ", effectiveLayers.Select((v, i) => $"[{i}]={v}"))}");
 
+        // ── Filler reservation ────────────────────────────────────────────────
+        // When ≥2 patterned SKUs and one is a small "filler" — its whole qty fits as a thin condo
+        // wall (qty ≤ perRow × ceilingRows) — reserve it for a PURE condo wall (loaded innermost),
+        // letting the heavier "bulk" SKUs fill primary completely. The filler's own leftover then
+        // rides on top of the last/shortest bulk row (cross-SKU top mix). Picks the lightest such SKU.
+        int reservedIdx = SelectFillerIndex(dims, requests);
+        if (PackingLog.IsEnabled)
+            PackingLog.Info($"FillerReserved: {(reservedIdx >= 0 ? $"[{reservedIdx}] {requests[reservedIdx].Spec.Description} {requests[reservedIdx].Spec.Content}" : "none")}");
+
         // ── Primary ───────────────────────────────────────────────────────────
         PackingLog.Phase("PRIMARY PACKING");
-        var packInfos = RunPrimaryPacking(dims, requests, placements, out double currentY, effectiveLayers);
+        var packInfos = RunPrimaryPacking(dims, requests, placements, out double currentY, effectiveLayers, reservedIdx);
         if (PackingLog.IsEnabled)
             PackingLog.Info($"PrimaryDone: currentY={currentY:F1}  placed={placements.Count}");
 
         // ── Balancing ─────────────────────────────────────────────────────────
         PackingLog.Phase("BALANCING");
-        RunBalancing(packInfos, dims, placements, ref currentY, effectiveLayers);
+        RunBalancing(packInfos, dims, placements, ref currentY, effectiveLayers, reservedIdx);
         if (PackingLog.IsEnabled)
             PackingLog.Info($"BalancingDone: currentY={currentY:F1}  placed={placements.Count}");
 
@@ -86,22 +95,46 @@ internal static class PackingEngine
 
         SortStacksByHeight(packInfos, placements, dims);
 
-        // ── Condo (ONE wall: complete single-SKU rows CBM bottom-up + remainder on top; kept only if it
-        //    stands within ≤1 step of the innermost block, else every leftover scatters on its own stacks) ──
-        PackingLog.Phase("CONDO PLACEMENT");
-        if (PackingLog.IsEnabled)
-            PackingLog.Info($"CondoStartY={currentY:F1}  available={dims.L - currentY:F1} cm");
-        var condoMap = RunCondoPlacement(packInfos, dims, currentY, placements);
-        if (PackingLog.IsEnabled)
-            foreach (var (k, v) in condoMap)
-                PackingLog.Info($"  [{k}] {requests[k].Spec.Description} {requests[k].Spec.Content}: condoPlaced={v}");
+        Dictionary<int,int> condoMap, scatterMap;
+        if (reservedIdx >= 0)
+        {
+            // ── Filler path: PURE condo wall for the reserved SKU (to ceiling, no bulk mixed in),
+            //    then its own leftover rides on top of the last/shortest bulk row. ──
+            PackingLog.Phase("FILLER CONDO PLACEMENT");
+            condoMap   = new Dictionary<int,int>();
+            scatterMap = new Dictionary<int,int>();
+            var reservedInfo = packInfos[reservedIdx];
 
-        // ── Scatter (condo overflow / discarded-condo leftovers → piled on own stacks up to the ceiling) ──
-        PackingLog.Phase("SCATTER TOP PLACEMENT");
-        var scatterMap = RunScatteredTopPlacement(packInfos, dims, placements);
-        if (PackingLog.IsEnabled)
-            foreach (var (k, v) in scatterMap)
-                PackingLog.Info($"  [{k}] {requests[k].Spec.Description} {requests[k].Spec.Content}: scatterPlaced={v}");
+            int inCondo = RunFillerCondo(reservedInfo, dims, currentY, placements);
+            if (inCondo > 0) condoMap[reservedIdx] = inCondo;
+
+            int leftover = reservedInfo.Requested - inCondo;
+            int onBulk   = leftover > 0 ? PlaceFillerLeftoverOnBulk(reservedInfo, dims, placements, leftover) : 0;
+            if (onBulk > 0) scatterMap[reservedIdx] = onBulk;
+
+            packInfos[reservedIdx] = reservedInfo with { Result = reservedInfo.Result with { Packed = inCondo + onBulk } };
+            if (PackingLog.IsEnabled)
+                PackingLog.Info($"  filler [{reservedIdx}]: condo={inCondo}  onBulk={onBulk}  lost={reservedInfo.Requested - inCondo - onBulk}");
+        }
+        else
+        {
+            // ── Condo (ONE wall: complete single-SKU rows CBM bottom-up + remainder on top; kept only if it
+            //    stands within ≤1 step of the innermost block, else every leftover scatters on its own stacks) ──
+            PackingLog.Phase("CONDO PLACEMENT");
+            if (PackingLog.IsEnabled)
+                PackingLog.Info($"CondoStartY={currentY:F1}  available={dims.L - currentY:F1} cm");
+            condoMap = RunCondoPlacement(packInfos, dims, currentY, placements);
+            if (PackingLog.IsEnabled)
+                foreach (var (k, v) in condoMap)
+                    PackingLog.Info($"  [{k}] {requests[k].Spec.Description} {requests[k].Spec.Content}: condoPlaced={v}");
+
+            // ── Scatter (condo overflow / discarded-condo leftovers → piled on own stacks up to the ceiling) ──
+            PackingLog.Phase("SCATTER TOP PLACEMENT");
+            scatterMap = RunScatteredTopPlacement(packInfos, dims, placements);
+            if (PackingLog.IsEnabled)
+                foreach (var (k, v) in scatterMap)
+                    PackingLog.Info($"  [{k}] {requests[k].Spec.Description} {requests[k].Spec.Content}: scatterPlaced={v}");
+        }
 
         // ── Move condo to innermost (Y=0) ─────────────────────────────────────
         // Primary stacks fill from condoDepth toward the door (high Y).
@@ -135,7 +168,7 @@ internal static class PackingEngine
 
     private static List<PackInfo> RunPrimaryPacking(
         ContainerDims dims, IReadOnlyList<(ProductSpec Spec, int Qty)> requests,
-        List<BoxPlacement> placements, out double currentY, int[] effectiveLayers)
+        List<BoxPlacement> placements, out double currentY, int[] effectiveLayers, int reservedIdx = -1)
     {
         var packInfos = new List<PackInfo>();
         currentY = 0;
@@ -150,10 +183,16 @@ internal static class PackingEngine
                 PackingLog.Info($"[{i}] {spec.Description} {spec.Content}  startY={productStartY:F1}  effectiveLayers={effectiveLayers[i]}  hasPattern={hasPattern}");
 
             PlaceResult r;
-            if (hasPattern)
+            if (i == reservedIdx)
             {
+                r = new PlaceResult(0, currentY, 0, 0);   // reserved filler → packed in the condo phase
+            }
+            else if (hasPattern)
+            {
+                // When a filler is reserved, bulk SKUs must fill primary completely (partial last wall)
+                // so nothing spills into the filler's condo.
                 r = PlaceProduct(dims, spec, requested, currentY, i, placements,
-                                 overrideMaxLayers: effectiveLayers[i]);
+                                 overrideMaxLayers: effectiveLayers[i], fillCompletely: reservedIdx >= 0);
                 currentY = r.EndY;
             }
             else
@@ -177,7 +216,7 @@ internal static class PackingEngine
 
     private static void RunBalancing(
         List<PackInfo> packInfos, ContainerDims dims,
-        List<BoxPlacement> placements, ref double currentY, int[] effectiveLayers)
+        List<BoxPlacement> placements, ref double currentY, int[] effectiveLayers, int reservedIdx = -1)
     {
         // ── Step A: Fill free Y with more primary stacks ──────────────────────
         // Leave 50 cm for condo/mixed; keep adding stacks while space remains.
@@ -192,7 +231,7 @@ internal static class PackingEngine
             anyAdded = false;
 
             var withRem = packInfos
-                .Where(info => info.HasPattern)
+                .Where(info => info.HasPattern && info.ProductIndex != reservedIdx)
                 .Select(info => {
                     int primary = placements.Count(p =>
                         p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase);
@@ -218,7 +257,8 @@ internal static class PackingEngine
 
                 var r = PlaceProduct(fillDims, info.Spec, rem, currentY,
                                      info.ProductIndex, placements, nextSI,
-                                     overrideMaxLayers: effectiveLayers[info.ProductIndex]);
+                                     overrideMaxLayers: effectiveLayers[info.ProductIndex],
+                                     fillCompletely: reservedIdx >= 0);
                 if (r.Packed > 0)
                 {
                     if (PackingLog.IsEnabled)
@@ -234,7 +274,7 @@ internal static class PackingEngine
             PackingLog.Info($"StepB (height balance): targets={string.Join("  ", effectiveLayers.Select((v, i) => $"[{i}]={v}"))}");
 
         var active = packInfos
-            .Where(info => info.HasPattern &&
+            .Where(info => info.HasPattern && info.ProductIndex != reservedIdx &&
                    placements.Any(p => p.ProductIndex == info.ProductIndex && p.StackIndex < CondoStackBase))
             .ToList();
 
@@ -534,6 +574,86 @@ internal static class PackingEngine
         return scatterMap;
     }
 
+    // Builds a PURE single-SKU condo wall for the reserved filler — one Y-slice (1 box deep) against
+    // what becomes the back wall, full container width, stacked in COMPLETE rows up to the ceiling.
+    // No other SKU is mixed in and there is no innermost-block height cap (unlike RunCondoPlacement),
+    // so the filler reaches its natural height (e.g. Mogu320 → 9/row × 13 rows = 117). The partial
+    // remainder is left for PlaceFillerLeftoverOnBulk. Returns the number of boxes placed.
+    private static int RunFillerCondo(
+        PackInfo info, ContainerDims dims, double condoAreaStart, List<BoxPlacement> placements)
+    {
+        var spec = info.Spec;
+        if (spec.W > dims.W + 0.01 || spec.H <= 0) return 0;
+
+        int perRow = (int)((dims.W + 0.01) / spec.W);
+        if (perRow < 1) return 0;
+        if (condoAreaStart + spec.L > dims.L + 0.01) return 0;   // no depth left for a wall
+
+        int    rem = info.Requested;
+        int    placed = 0, row = 0;
+        double z = 0;
+        int    si = CondoStackBase + info.ProductIndex;
+
+        while (rem >= perRow && z + spec.H <= dims.H + 0.01)
+        {
+            for (int c = 0; c < perRow; c++)
+                placements.Add(new BoxPlacement(
+                    c * spec.W, condoAreaStart, z, spec.W, spec.L, spec.H,
+                    info.ProductIndex, false, si, row));
+            placed += perRow;
+            rem    -= perRow;
+            z      += spec.H;
+            row++;
+        }
+        return placed;
+    }
+
+    // Places the filler's leftover (boxes too few to complete a condo row) on TOP of the SHORTEST
+    // bulk stack — the last/door-side row of the staircase — as a partial layer (cross-SKU top mix:
+    // "ผสมในแถว 6"). Attached to that bulk stack's StackIndex so it shifts with it in the final move.
+    // Returns boxes placed.
+    private static int PlaceFillerLeftoverOnBulk(
+        PackInfo info, ContainerDims dims, List<BoxPlacement> placements, int count)
+    {
+        var spec = info.Spec;
+        if (count <= 0 || spec.W > dims.W + 0.01) return 0;
+
+        // Shortest bulk stack (lowest top Z); tie → closest to the door (max Y).
+        var bulk = placements
+            .Where(p => p.StackIndex < CondoStackBase && p.ProductIndex != info.ProductIndex)
+            .GroupBy(p => p.StackIndex)
+            .Select(g => new
+            {
+                SI       = g.Key,
+                StackY   = g.Min(p => p.Y),
+                TopZ     = g.Max(p => p.Z + p.BH),
+                TopLayer = g.Max(p => p.LayerIndex) + 1
+            })
+            .OrderBy(s => s.TopZ).ThenByDescending(s => s.StackY)
+            .FirstOrDefault();
+        if (bulk is null) return 0;
+
+        int perRow = (int)((dims.W + 0.01) / spec.W);
+        if (perRow < 1) return 0;
+
+        int    placed = 0, layer = bulk.TopLayer;
+        double z = bulk.TopZ;
+        int    rem = count;
+        while (rem > 0 && z + spec.H <= dims.H + 0.01)
+        {
+            int n = Math.Min(perRow, rem);
+            for (int c = 0; c < n; c++)
+                placements.Add(new BoxPlacement(
+                    c * spec.W, bulk.StackY, z, spec.W, spec.L, spec.H,
+                    info.ProductIndex, false, bulk.SI, layer));
+            placed += n;
+            rem    -= n;
+            z      += spec.H;
+            layer++;
+        }
+        return placed;
+    }
+
     /// <summary>
     /// Moves all condo boxes to Y=0 (innermost/back wall) and shifts primary stacks
     /// (including scatter) upward by the condo depth so they fill from condoDepth toward
@@ -605,7 +725,7 @@ internal static class PackingEngine
     private static PlaceResult PlaceProduct(
         ContainerDims dims, ProductSpec spec, int requested,
         double startY, int productIndex, List<BoxPlacement> placements,
-        int initialStackIndex = 0, int overrideMaxLayers = 0)
+        int initialStackIndex = 0, int overrideMaxLayers = 0, bool fillCompletely = false)
     {
         if (spec.PatternA is not { Length: > 0 }) return new(0, startY, 0, 0);
 
@@ -635,7 +755,12 @@ internal static class PackingEngine
         if (fullBpl > 0 && layerLimit > 0)
         {
             int fullStackBoxes = fullBpl * layerLimit;
-            maxStacks = Math.Max(1, requested / fullStackBoxes); // floor division
+            // Normally floor → a partial last stack is left for condo. When fillCompletely (a "bulk"
+            // SKU that must fill primary so the filler condo stays pure), use ceiling → build the
+            // partial last wall here instead.
+            maxStacks = fillCompletely
+                ? Math.Max(1, (int)Math.Ceiling((double)requested / fullStackBoxes))
+                : Math.Max(1, requested / fullStackBoxes);
         }
 
         while (packed < requested)
@@ -657,7 +782,12 @@ internal static class PackingEngine
 
                 int capacity = CountLayerCapacity(sections!, spec, dims, stackY);
                 if (capacity <= 0) break;
-                if (requested - packed < capacity) break; // not enough for a full layer
+                if (requested - packed < capacity)
+                {
+                    if (!fillCompletely) break;       // normal: don't start a partial layer
+                    capacity = requested - packed;    // fillCompletely: place a partial top layer
+                    if (capacity <= 0) break;
+                }
 
                 int n = PlaceLayerAt(sections, spec, dims, stackY, z, capacity, productIndex, placements, stackIndex, layer);
                 if (n < 0) break;
@@ -769,6 +899,34 @@ internal static class PackingEngine
             }
         }
         return placed > 0 ? placed : -1;
+    }
+
+    // Picks the filler SKU to reserve for a pure condo wall (see Calculate). A SKU qualifies when its
+    // ENTIRE quantity fits as a thin condo wall — perRow (= boxes across the width) × ceilingRows
+    // (= layers that fit under the container height). Among qualifiers, the lightest (min total CBM)
+    // wins. Returns -1 when there are fewer than 2 patterned SKUs or none qualifies.
+    private static int SelectFillerIndex(
+        ContainerDims dims, IReadOnlyList<(ProductSpec Spec, int Qty)> requests)
+    {
+        int patterned = requests.Count(r => r.Spec.PatternA is { Length: > 0 });
+        if (patterned < 2) return -1;
+
+        int    best     = -1;
+        double bestCbm  = double.MaxValue;
+        for (int i = 0; i < requests.Count; i++)
+        {
+            var (spec, qty) = requests[i];
+            if (spec.PatternA is not { Length: > 0 } || spec.W <= 0 || spec.H <= 0) continue;
+
+            int perRow   = (int)((dims.W + 0.01) / spec.W);
+            int ceilRows = (int)Math.Floor(dims.H / spec.H);
+            if (perRow < 1 || ceilRows < 1) continue;
+            if (qty > perRow * ceilRows) continue;            // too big to be a thin wall → not a filler
+
+            double totalCbm = qty * spec.Cbm;
+            if (totalCbm < bestCbm) { bestCbm = totalCbm; best = i; }
+        }
+        return best;
     }
 
     private static int[] ComputeEffectiveLayers(
