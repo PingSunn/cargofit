@@ -39,6 +39,16 @@ public class PlanningView : UserControl
     private Button _exportPdfBtn   = null!;
     private Button _exportDebugBtn = null!;
 
+    // Manual leftover editor (Feature 2)
+    private LeftoverEditCanvas _editCanvas = null!;
+    private Border _camOverlay   = null!;
+    private Button _editToggleBtn = null!;
+    private Border _editToolbar  = null!;
+    private Slider _layerSlider  = null!;
+    private bool _editMode;
+    private bool _hasManualEdits;
+    private List<BoxPlacement>? _pristinePlacements;
+
     // Camera overlay labels
     private TextBlock _camAzLabel  = null!;
     private TextBlock _camElLabel  = null!;
@@ -137,6 +147,22 @@ public class PlanningView : UserControl
         chipRow.Children.Add(MakeChip("สีสลับชั้น", false, v => _canvas.SetColorByStackLayer(v)));
         chipRow.Children.Add(MakeChip("แสดงขนาด",  true,  v => _canvas.SetShowDimensions(v)));
 
+        _editToggleBtn = new Button
+        {
+            Content = "✏️ แก้กล่องเศษ",
+            FontSize = 10,
+            Padding = new Thickness(7, 2),
+            CornerRadius = new CornerRadius(5),
+            Background = SurfaceSub,
+            BorderBrush = BorderLight,
+            BorderThickness = new Thickness(1),
+            Foreground = InkMuted,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            IsEnabled = false
+        };
+        _editToggleBtn.Click += (_, _) => EnterEditMode();
+        chipRow.Children.Add(_editToggleBtn);
+
         chipBar.Child = chipRow;
         dock.Children.Add(chipBar);
 
@@ -159,7 +185,7 @@ public class PlanningView : UserControl
         _camAzLabel   = MakeCamLabel();
         _camElLabel   = MakeCamLabel();
         _camZoomLabel = MakeCamLabel();
-        var camOverlay = new Border
+        _camOverlay = new Border
         {
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment   = VerticalAlignment.Bottom,
@@ -174,9 +200,21 @@ public class PlanningView : UserControl
             }
         };
 
+        // 2D top-down leftover editor — swapped in over the 3D canvas while editing (Feature 2)
+        _editCanvas = new LeftoverEditCanvas
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment   = VerticalAlignment.Stretch,
+            IsVisible           = false
+        };
+        _editCanvas.EditCommitted += () => { _hasManualEdits = true; _canvas.InvalidateVisual(); };
+        _editToolbar = BuildEditToolbar();
+
         var canvasGrid = new Grid();
         canvasGrid.Children.Add(_canvas);
-        canvasGrid.Children.Add(camOverlay);
+        canvasGrid.Children.Add(_editCanvas);
+        canvasGrid.Children.Add(_camOverlay);
+        canvasGrid.Children.Add(_editToolbar);
         canvasCard.Child = canvasGrid;
 
         // Keep overlay in sync with camera
@@ -370,6 +408,145 @@ public class PlanningView : UserControl
             onToggle(on[0]);
         };
         return btn;
+    }
+
+    // ── Manual leftover editor (Feature 2) ───────────────────────────────────--
+    private Border BuildEditToolbar()
+    {
+        var rotateBtn = EditChip("🔄 หมุน 90°");
+        rotateBtn.Click += (_, _) => _editCanvas.RotateSelected();
+
+        var resetBtn = EditChip("↺ รีเซ็ตกลับ auto");
+        resetBtn.Click += (_, _) => ResetToAuto();
+
+        var doneBtn = EditChip("✓ เสร็จ (ดู 3D)");
+        doneBtn.Click += (_, _) => ExitEditMode();
+
+        _layerSlider = new Slider
+        {
+            Minimum = 0, Maximum = 1, Value = 1, Width = 110,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        _layerSlider.ValueChanged += (_, _) => _editCanvas.SetCutRatio(_layerSlider.Value);
+
+        return new Border
+        {
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment   = VerticalAlignment.Top,
+            Margin              = new Thickness(10, 10, 0, 0),
+            Background          = new SolidColorBrush(Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF)),
+            BorderBrush         = BorderLight,
+            BorderThickness     = new Thickness(1),
+            CornerRadius        = new CornerRadius(8),
+            Padding             = new Thickness(8, 6),
+            IsVisible           = false,
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing     = 6,
+                Children =
+                {
+                    rotateBtn, resetBtn,
+                    new TextBlock { Text = "ชั้นที่เห็น", FontSize = 11, Foreground = InkMuted, VerticalAlignment = VerticalAlignment.Center },
+                    _layerSlider,
+                    doneBtn
+                }
+            }
+        };
+    }
+
+    private static Button EditChip(string label) => new()
+    {
+        Content = label,
+        FontSize = 11,
+        Padding = new Thickness(9, 3),
+        CornerRadius = new CornerRadius(5),
+        Background = SurfaceSub,
+        BorderBrush = BorderLight,
+        BorderThickness = new Thickness(1),
+        Foreground = Ink,
+        Cursor = new Cursor(StandardCursorType.Hand)
+    };
+
+    private void EnterEditMode()
+    {
+        if (_editMode || _lastOutput is null || _lastContainer is null) return;
+        if (!_lastOutput.Placements.Any(b => b.Kind == PlacementKind.Scatter)) return;
+
+        _editMode = true;
+        _editCanvas.SetData(_lastContainer, _lastOutput.Placements);
+        _layerSlider.Value = 1.0;
+        _editCanvas.SetCutRatio(1.0);
+        _canvas.IsVisible      = false;
+        _camOverlay.IsVisible  = false;
+        _editCanvas.IsVisible  = true;
+        _editToolbar.IsVisible = true;
+    }
+
+    private void ExitEditMode()
+    {
+        _editMode = false;
+        _editCanvas.IsVisible  = false;
+        _editToolbar.IsVisible = false;
+        _canvas.IsVisible      = true;
+        _camOverlay.IsVisible  = true;
+        _canvas.InvalidateVisual();   // reflect manual edits in the 3D view
+    }
+
+    // Restore the engine's original layout, discarding all manual moves. Replaces the contents of the
+    // SAME list the 3D canvas / PDF hold (BoxPlacement is immutable, so reusing snapshot refs is safe).
+    private void ResetToAuto()
+    {
+        if (_lastOutput is null || _pristinePlacements is null) return;
+        var live = _lastOutput.Placements;
+        live.Clear();
+        live.AddRange(_pristinePlacements);
+        _hasManualEdits = false;
+        _editCanvas.ClearSelection();
+        _editCanvas.InvalidateVisual();
+        _canvas.InvalidateVisual();
+    }
+
+    // A new/cleared layout invalidates any manual edit → drop back to the 3D view and lock the toggle.
+    private void LeaveEditMode()
+    {
+        if (_editMode) ExitEditMode();
+        _hasManualEdits     = false;
+        _pristinePlacements = null;
+        if (_editToggleBtn is not null) _editToggleBtn.IsEnabled = false;
+    }
+
+    private async System.Threading.Tasks.Task<bool> ConfirmAsync(string message)
+    {
+        var owner = TopLevel.GetTopLevel(this) as Window;
+        if (owner is null) return true;
+        var yes = new Button { Content = "ดำเนินการต่อ", Padding = new Thickness(20, 6) };
+        var no  = new Button { Content = "ยกเลิก",       Padding = new Thickness(20, 6) };
+        var dlg = new Window
+        {
+            Title = "ยืนยัน",
+            Width = 440, CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel
+            {
+                Margin = new Thickness(20),
+                Children =
+                {
+                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, MaxWidth = 400 },
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Spacing = 10,
+                        Margin = new Thickness(0, 16, 0, 0),
+                        Children = { no, yes }
+                    }
+                }
+            }
+        };
+        yes.Click += (_, _) => dlg.Close(true);
+        no.Click  += (_, _) => dlg.Close(false);
+        return await dlg.ShowDialog<bool>(owner);
     }
 
     private Border BuildProductStatRow(StatsCalculator.PackStatRow row, double containerCbm)
@@ -579,6 +756,7 @@ public class PlanningView : UserControl
             ApplyContainerSelection(_containerItems[i], i == idx);
         if (idx >= 0 && idx < ContainerSpec.All.Count)
             _canvas.SetData(ContainerSpec.All[idx], []);
+        LeaveEditMode();
     }
 
     private static void ApplyContainerSelection(Border item, bool selected)
@@ -679,6 +857,7 @@ public class PlanningView : UserControl
         PopulateProductChecklist();
         if (_selectedContainerIndex >= 0 && _selectedContainerIndex < ContainerSpec.All.Count)
             _canvas.SetData(ContainerSpec.All[_selectedContainerIndex], []);
+        LeaveEditMode();
     }
 
     private void UpdateQuantitySection()
@@ -796,6 +975,11 @@ public class PlanningView : UserControl
         if (_selectedContainerIndex < 0 || _selectedContainerIndex >= ContainerSpec.All.Count) return;
         var container = ContainerSpec.All[_selectedContainerIndex];
 
+        // Recalculating rebuilds the layout from scratch — warn before discarding manual edits.
+        if (_hasManualEdits && !await ConfirmAsync("การคำนวณใหม่จะล้างการจัดเรียงกล่องด้วยมือทั้งหมด ดำเนินการต่อหรือไม่?"))
+            return;
+        if (_editMode) ExitEditMode();
+
         _statsPanel.Children.Clear();
         _hiddenProducts.Clear();
 
@@ -818,6 +1002,7 @@ public class PlanningView : UserControl
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Foreground = InkMuted, FontSize = 13
             });
+            LeaveEditMode();
             _canvas.SetData(container, []);
             return;
         }
@@ -846,6 +1031,11 @@ public class PlanningView : UserControl
         _lastContainer = container;
         _exportPdfBtn.IsEnabled   = true;
         _exportDebugBtn.IsEnabled = true;
+
+        // Snapshot the pristine auto layout (for "reset to auto") and enable the editor if there are leftovers.
+        _pristinePlacements      = new List<BoxPlacement>(output.Placements);
+        _hasManualEdits          = false;
+        _editToggleBtn.IsEnabled = output.Placements.Any(b => b.Kind == PlacementKind.Scatter);
 
         _canvas.SetData(container, output.Placements);
     }

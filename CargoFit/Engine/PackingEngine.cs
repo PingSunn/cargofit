@@ -456,7 +456,8 @@ internal static class PackingEngine
                 for (int c = 0; c < perRow; c++)
                     condoBoxes.Add(new BoxPlacement(
                         c * spec.W, condoY, z, spec.W, spec.L, spec.H,
-                        queue[q].ProductIndex, false, CondoStackBase + queue[q].ProductIndex, row));
+                        queue[q].ProductIndex, false, CondoStackBase + queue[q].ProductIndex, row,
+                        PlacementKind.Condo));
                 condoMap[queue[q].ProductIndex] = condoMap.GetValueOrDefault(queue[q].ProductIndex) + perRow;
                 rem[q] -= perRow;
                 z += spec.H;
@@ -476,7 +477,8 @@ internal static class PackingEngine
                 if (z + spec.H > targetCondoZ + 0.01) break;                                 // cap → overflow→scatter
                 condoBoxes.Add(new BoxPlacement(
                     x, condoY, z, spec.W, spec.L, spec.H,
-                    queue[q].ProductIndex, false, CondoStackBase + queue[q].ProductIndex, row));
+                    queue[q].ProductIndex, false, CondoStackBase + queue[q].ProductIndex, row,
+                    PlacementKind.Condo));
                 condoMap[queue[q].ProductIndex] = condoMap.GetValueOrDefault(queue[q].ProductIndex) + 1;
                 rem[q]--;
                 x += spec.W;
@@ -555,8 +557,13 @@ internal static class PackingEngine
                 if (cap <= 0) { stacks.RemoveAt(pick); continue; }
 
                 int take = Math.Min(cap, rem);
+                int before = placements.Count;
                 int n = PlaceLayerAt(sections, info.Spec, dims, s.StackY, s.TopZ, take,
                                      info.ProductIndex, placements, s.SI, s.TopLayer);
+                // Tag the boxes this scatter phase just added. PlaceLayerAt is shared with primary
+                // placement, so scatter boxes can only be marked here, after the fact.
+                for (int bi = before; bi < placements.Count; bi++)
+                    placements[bi] = placements[bi] with { Kind = PlacementKind.Scatter };
                 if (n <= 0) { stacks.RemoveAt(pick); continue; }
 
                 rem -= n;
@@ -599,7 +606,7 @@ internal static class PackingEngine
             for (int c = 0; c < perRow; c++)
                 placements.Add(new BoxPlacement(
                     c * spec.W, condoAreaStart, z, spec.W, spec.L, spec.H,
-                    info.ProductIndex, false, si, row));
+                    info.ProductIndex, false, si, row, PlacementKind.Condo));
             placed += perRow;
             rem    -= perRow;
             z      += spec.H;
@@ -643,9 +650,11 @@ internal static class PackingEngine
         {
             int n = Math.Min(perRow, rem);
             for (int c = 0; c < n; c++)
+                // Filler leftover piled on another product's bulk stack — a loose leftover the engine
+                // counts as scatter, so the manual editor treats it as editable too.
                 placements.Add(new BoxPlacement(
                     c * spec.W, bulk.StackY, z, spec.W, spec.L, spec.H,
-                    info.ProductIndex, false, bulk.SI, layer));
+                    info.ProductIndex, false, bulk.SI, layer, PlacementKind.Scatter));
             placed += n;
             rem    -= n;
             z      += spec.H;

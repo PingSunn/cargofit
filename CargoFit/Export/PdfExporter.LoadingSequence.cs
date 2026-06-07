@@ -30,7 +30,7 @@ internal static partial class PdfExporter
 
         // ── Loading unit data model ───────────────────────────────────────────
 
-        private enum UnitKind { PrimaryStack, Condo }
+        private enum UnitKind { PrimaryStack, Condo, Scatter }
 
         private sealed record LoadingUnit(
             UnitKind Kind,
@@ -51,14 +51,17 @@ internal static partial class PdfExporter
             int LayerNo,
             int Count,
             bool IsPartialRow,
-            List<(int ProductIndex, int Count)> ByProduct);  // 1 entry for primary stack
+            List<(int ProductIndex, int Count)> ByProduct,   // 1 entry for primary stack
+            bool IsScatter = false);                          // layer is leftover piled on top of the stack
 
         private List<LoadingUnit> BuildLoadingUnits()
         {
             var raw = new List<LoadingUnit>();
 
-            // Primary stacks — group by (ProductIndex, StackIndex) since StackIndex
-            // restarts at 0 for each product.
+            // Stacks — group by (ProductIndex, StackIndex). Scatter boxes sit ON TOP of the stack they
+            // belong to (same StackIndex + Y), so they join their stack's card as the top layer(s).
+            // A group with NO primary box (a leftover that landed on another product's stack) becomes a
+            // stand-alone "กระจาย" unit instead of a bogus stack.
             foreach (var g in placements
                                  .Where(p => p.StackIndex < PackingEngine.CondoStackBase)
                                  .GroupBy(p => (p.ProductIndex, p.StackIndex)))
@@ -66,6 +69,7 @@ internal static partial class PdfExporter
                 var boxes = g.ToList();
                 int pi = g.Key.ProductIndex;
                 int si = g.Key.StackIndex;
+                bool hasPrimary = boxes.Any(b => b.Kind != PlacementKind.Scatter);
 
                 var layers = boxes
                     .GroupBy(b => b.LayerIndex)
@@ -74,11 +78,12 @@ internal static partial class PdfExporter
                         LayerNo: lg.Key + 1,
                         Count: lg.Count(),
                         IsPartialRow: false,
-                        ByProduct: new List<(int, int)> { (pi, lg.Count()) }))
+                        ByProduct: new List<(int, int)> { (pi, lg.Count()) },
+                        IsScatter: lg.All(b => b.Kind == PlacementKind.Scatter)))
                     .ToList();
 
                 raw.Add(new LoadingUnit(
-                    UnitKind.PrimaryStack,
+                    hasPrimary ? UnitKind.PrimaryStack : UnitKind.Scatter,
                     ProductIndex: pi,
                     StackIndex: si,
                     StackOrdinal: null,
@@ -146,8 +151,9 @@ internal static partial class PdfExporter
                     Layers: layers));
             }
 
-            // Innermost first (lowest avg Y — Y=0 is back wall)
-            var sorted = raw.OrderBy(u => u.AvgY).ToList();
+            // Stacks + condo: innermost first (lowest avg Y — Y=0 is back wall).
+            // Scatter-only units (a leftover on another product's stack) are appended last as "กระจาย".
+            var sorted = raw.Where(u => u.Kind != UnitKind.Scatter).OrderBy(u => u.AvgY).ToList();
 
             // Assign per-product primary-stack ordinals (innermost = #1).
             var ordinalByKey = new Dictionary<(int Pi, int Si), (int Ord, int Total)>();
@@ -174,6 +180,8 @@ internal static partial class PdfExporter
                 }
             }
 
+            // Scatter steps come after every stack/condo (they sit on top, loaded last).
+            sorted.AddRange(raw.Where(u => u.Kind == UnitKind.Scatter).OrderBy(u => u.ProductIndex!.Value));
             return sorted;
         }
 
@@ -181,7 +189,8 @@ internal static partial class PdfExporter
 
         private void DrawLoadingUnitCard(int stepNo, int totalSteps, LoadingUnit unit)
         {
-            bool isCondo = unit.Kind == UnitKind.Condo;
+            bool isCondo   = unit.Kind == UnitKind.Condo;
+            bool isScatter = unit.Kind == UnitKind.Scatter;
 
             // Header content depends on unit kind.
             // Primary stack: single product → color the accent bar + product name in header.
@@ -190,11 +199,11 @@ internal static partial class PdfExporter
                 ? C(0x64, 0x74, 0x8B)
                 : Palette[unit.ProductIndex!.Value % Palette.Length];
 
-            string typeLabel = isCondo
-                ? "คอนโด"
-                : $"ต๊งที่ {unit.StackOrdinal}/{unit.StackTotalOfProduct}";
-            SKColor typeBg = isCondo ? C(0xF3, 0xE8, 0xFF) : C(0xDC, 0xFC, 0xE7);
-            SKColor typeFg = isCondo ? C(0x7C, 0x3A, 0xED) : C(0x15, 0x80, 0x3D);
+            string typeLabel = isCondo   ? "คอนโด"
+                             : isScatter ? "กระจาย (วางบนยอด)"
+                             : $"ต๊งที่ {unit.StackOrdinal}/{unit.StackTotalOfProduct}";
+            SKColor typeBg = isCondo ? C(0xF3, 0xE8, 0xFF) : isScatter ? C(0xFE, 0xF3, 0xC7) : C(0xDC, 0xFC, 0xE7);
+            SKColor typeFg = isCondo ? C(0x7C, 0x3A, 0xED) : isScatter ? C(0xB4, 0x53, 0x09) : C(0x15, 0x80, 0x3D);
 
             // Two zoomed-in diagrams: just this unit's footprint (X×Y) and section (axis × Z).
             // Condo cards also get a 3D isometric view for spatial clarity.
@@ -348,6 +357,14 @@ internal static partial class PdfExporter
                          && b.StackIndex <  PackingEngine.MixedStackBase
                          && Math.Abs(Math.Round(b.Y, 1) - targetY) < 0.5;
             }
+            if (unit.Kind == UnitKind.Scatter)
+            {
+                int spi = unit.ProductIndex!.Value;
+                int ssi = unit.StackIndex ?? -1;
+                return b => b.Kind == PlacementKind.Scatter && b.ProductIndex == spi
+                         && (ssi < 0 || b.StackIndex == ssi);
+            }
+            // Primary stack: include the scatter boxes piled on its top (same ProductIndex + StackIndex).
             int pi = unit.ProductIndex!.Value;
             int si = unit.StackIndex!.Value;
             return b => b.ProductIndex == pi && b.StackIndex == si;
@@ -358,12 +375,21 @@ internal static partial class PdfExporter
             if (unit.Kind == UnitKind.Condo)
                 return $"รวม {unit.TotalBoxes} กล่อง  ·  {unit.ProductIndices.Count} ชนิดผสมในแถวเดียว";
 
+            if (unit.Kind == UnitKind.Scatter)
+            {
+                var srow = statsRows.FirstOrDefault(r => r.ProductIndex == unit.ProductIndex!.Value);
+                string sdims = srow != null ? $"{srow.Spec.W:F0}×{srow.Spec.L:F0}×{srow.Spec.H:F0} cm" : "";
+                return $"รวม {unit.TotalBoxes} กล่อง  ·  วางกระจายบนยอดกองที่เตี้ยสุด  ·  {sdims}";
+            }
+
             int pi = unit.ProductIndex!.Value;
             var row = statsRows.FirstOrDefault(r => r.ProductIndex == pi);
             string dims = row != null
                 ? $"{row.Spec.W:F0}×{row.Spec.L:F0}×{row.Spec.H:F0} cm"
                 : "";
-            return $"รวม {unit.TotalBoxes} กล่อง  ·  {dims}";
+            int scatterOnTop = unit.Layers.Where(l => l.IsScatter).Sum(l => l.Count);
+            string extra = scatterOnTop > 0 ? $"  ·  เศษวางบนยอด {scatterOnTop} กล่อง" : "";
+            return $"รวม {unit.TotalBoxes} กล่อง  ·  {dims}{extra}";
         }
 
         private void DrawLayerRow(LayerEntry layer, bool isCondo, SKColor accentCol,
@@ -388,6 +414,8 @@ internal static partial class PdfExporter
 
             if (layer.IsPartialRow)
                 DrawText("  (แถวบางส่วน)", tx, ey, 9, C(0x94, 0xA3, 0xB8));
+            else if (layer.IsScatter)
+                DrawText("  (เศษวางบนยอด)", tx, ey, 9, C(0xB4, 0x53, 0x09));
         }
 
         private float DrawLayerProductBreakdown(
