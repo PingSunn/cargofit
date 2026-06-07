@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -10,10 +11,21 @@ namespace CargoFit.Tests;
 // without updating WebEditorServer.Routes / the csproj LogicalName).
 public class WebEditorServerTests
 {
+    // Bind a free ephemeral port (not the production 8753) so the test is hermetic even when the
+    // real app is running.
+    private static int FreePort()
+    {
+        var l = new TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        int port = ((IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+        return port;
+    }
+
     [Fact]
     public async Task Serves_embedded_assets_and_404s_unknown_paths()
     {
-        WebEditorServer.EnsureStarted();
+        WebEditorServer.EnsureStarted(FreePort());
         try
         {
             using var http = new HttpClient();

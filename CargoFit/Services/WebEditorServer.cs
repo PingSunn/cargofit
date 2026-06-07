@@ -16,11 +16,12 @@ namespace CargoFit;
 /// </summary>
 internal static class WebEditorServer
 {
-    private const int Port = 8753;          // fixed → stable origin for persisted FS-Access handle
+    private const int DefaultPort = 8753;   // fixed → stable origin for persisted FS-Access handle
+    private static int _port = DefaultPort;  // overridable for hermetic tests (free ephemeral port)
     private static HttpListener? _listener;
     private static readonly object Gate = new();
 
-    internal static string Url => $"http://127.0.0.1:{Port}/";
+    internal static string Url => $"http://127.0.0.1:{_port}/";
 
     // request path → (embedded resource logical name, content type)
     private static readonly Dictionary<string, (string Res, string Mime)> Routes = new()
@@ -32,11 +33,12 @@ internal static class WebEditorServer
         ["/vendor/three.min.js"] = ("CargoFit.WebEditor.vendor.three.min.js", "application/javascript; charset=utf-8"),
     };
 
-    internal static void EnsureStarted()
+    internal static void EnsureStarted(int port = DefaultPort)
     {
         lock (Gate)
         {
             if (_listener is { IsListening: true }) return;
+            _port = port;
             var listener = new HttpListener();
             listener.Prefixes.Add(Url);
             listener.Start();
