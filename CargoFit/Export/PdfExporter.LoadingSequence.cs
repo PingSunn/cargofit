@@ -45,7 +45,8 @@ internal static partial class PdfExporter
             double XMin,
             double XMax,
             int TotalBoxes,
-            List<LayerEntry> Layers);
+            List<LayerEntry> Layers,
+            List<BoxPlacement>? ForeignScatter = null);   // cross-product leftovers piled on this stack
 
         private sealed record LayerEntry(
             int LayerNo,
@@ -58,18 +59,46 @@ internal static partial class PdfExporter
         {
             var raw = new List<LoadingUnit>();
 
-            // Stacks — group by (ProductIndex, StackIndex). Scatter boxes sit ON TOP of the stack they
-            // belong to (same StackIndex + Y), so they join their stack's card as the top layer(s).
-            // A group with NO primary box (a leftover that landed on another product's stack) becomes a
-            // stand-alone "กระจาย" unit instead of a bogus stack.
-            foreach (var g in placements
-                                 .Where(p => p.StackIndex < PackingEngine.CondoStackBase)
-                                 .GroupBy(p => (p.ProductIndex, p.StackIndex)))
+            // Cross-product ("foreign") scatter = a leftover sitting on a DIFFERENT product's stack
+            // (engine's filler-on-bulk). Map each to its host stack — the primary box directly beneath —
+            // so it shows on THAT stack's card. Same-product scatter (on its own stack) is left in place
+            // and folds into its own stack below.
+            var primaryBoxes = placements
+                .Where(p => p.Kind != PlacementKind.Scatter && p.StackIndex < PackingEngine.CondoStackBase)
+                .ToList();
+            var foreignIdx    = new HashSet<int>();
+            var foreignByHost = new Dictionary<(int Pi, int Si), List<BoxPlacement>>();
+            for (int i = 0; i < placements.Count; i++)
             {
-                var boxes = g.ToList();
+                var b = placements[i];
+                if (b.Kind != PlacementKind.Scatter) continue;
+                var support = primaryBoxes
+                    .Where(o => o.Z + o.BH <= b.Z + 0.5 && Foot2D(b, o))
+                    .OrderByDescending(o => o.Z + o.BH)
+                    .FirstOrDefault();
+                if (support is null || support.ProductIndex == b.ProductIndex) continue;
+                foreignIdx.Add(i);
+                var key = (support.ProductIndex, support.StackIndex);
+                if (!foreignByHost.TryGetValue(key, out var list)) foreignByHost[key] = list = new List<BoxPlacement>();
+                list.Add(b);
+            }
+
+            // Stacks — group by (ProductIndex, StackIndex). Same-product scatter folds in as top layer(s);
+            // foreign scatter is attached to its host stack here. A group with NO primary box becomes a
+            // stand-alone "กระจาย" unit.
+            foreach (var g in placements
+                                 .Select((p, i) => (p, i))
+                                 .Where(t => t.p.StackIndex < PackingEngine.CondoStackBase && !foreignIdx.Contains(t.i))
+                                 .GroupBy(t => (t.p.ProductIndex, t.p.StackIndex)))
+            {
+                var boxes = g.Select(t => t.p).ToList();
                 int pi = g.Key.ProductIndex;
                 int si = g.Key.StackIndex;
                 bool hasPrimary = boxes.Any(b => b.Kind != PlacementKind.Scatter);
+
+                foreignByHost.TryGetValue((pi, si), out var foreign);
+                foreign ??= new List<BoxPlacement>();
+                var allBoxes = boxes.Concat(foreign).ToList();
 
                 var layers = boxes
                     .GroupBy(b => b.LayerIndex)
@@ -82,20 +111,33 @@ internal static partial class PdfExporter
                         IsScatter: lg.All(b => b.Kind == PlacementKind.Scatter)))
                     .ToList();
 
+                // Foreign leftovers → extra top layers tagged with their OWN product.
+                layers.AddRange(foreign
+                    .GroupBy(b => b.LayerIndex)
+                    .OrderBy(lg => lg.Key)
+                    .Select(lg => new LayerEntry(
+                        LayerNo: lg.Key + 1,
+                        Count: lg.Count(),
+                        IsPartialRow: lg.Select(b => b.ProductIndex).Distinct().Count() > 1,
+                        ByProduct: lg.GroupBy(b => b.ProductIndex).OrderBy(x => x.Key)
+                                     .Select(x => (x.Key, x.Count())).ToList(),
+                        IsScatter: true)));
+
                 raw.Add(new LoadingUnit(
                     hasPrimary ? UnitKind.PrimaryStack : UnitKind.Scatter,
                     ProductIndex: pi,
                     StackIndex: si,
                     StackOrdinal: null,
                     StackTotalOfProduct: null,
-                    ProductIndices: new List<int> { pi },
-                    AvgY: boxes.Average(b => b.Y + b.BL * 0.5),
-                    YMin: boxes.Min(b => b.Y),
-                    YMax: boxes.Max(b => b.Y + b.BL),
-                    XMin: boxes.Min(b => b.X),
-                    XMax: boxes.Max(b => b.X + b.BW),
-                    TotalBoxes: boxes.Count,
-                    Layers: layers));
+                    ProductIndices: allBoxes.Select(b => b.ProductIndex).Distinct().OrderBy(x => x).ToList(),
+                    AvgY: allBoxes.Average(b => b.Y + b.BL * 0.5),
+                    YMin: allBoxes.Min(b => b.Y),
+                    YMax: allBoxes.Max(b => b.Y + b.BL),
+                    XMin: allBoxes.Min(b => b.X),
+                    XMax: allBoxes.Max(b => b.X + b.BW),
+                    TotalBoxes: allBoxes.Count,
+                    Layers: layers,
+                    ForeignScatter: foreign.Count > 0 ? foreign : null));
             }
 
             // Condos — group by Y-row only (mix products in the same column).
@@ -185,12 +227,18 @@ internal static partial class PdfExporter
             return sorted;
         }
 
+        // Footprint (X/Y) overlap test — used to find the host stack a foreign leftover sits on.
+        private static bool Foot2D(BoxPlacement a, BoxPlacement b)
+            => a.X < b.X + b.BW - 0.01 && b.X < a.X + a.BW - 0.01
+            && a.Y < b.Y + b.BL - 0.01 && b.Y < a.Y + a.BL - 0.01;
+
         // ── Loading-unit card ─────────────────────────────────────────────────
 
         private void DrawLoadingUnitCard(int stepNo, int totalSteps, LoadingUnit unit)
         {
             bool isCondo   = unit.Kind == UnitKind.Condo;
             bool isScatter = unit.Kind == UnitKind.Scatter;
+            bool wantsIso  = isCondo || unit.Kind == UnitKind.PrimaryStack;   // 3D for stacks + condo
 
             // Header content depends on unit kind.
             // Primary stack: single product → color the accent bar + product name in header.
@@ -218,7 +266,8 @@ internal static partial class PdfExporter
             double yRange = unit.YMax - unit.YMin;
             bool xHorizontal = xRange > yRange;
 
-            var unitBoxes = placements.Where(BuildHighlightPredicate(unit)).ToList();
+            var unitBoxes = placements.Where(BuildHighlightPredicate(unit))
+                .Concat(unit.ForeignScatter ?? Enumerable.Empty<BoxPlacement>()).ToList();
 
             // Layer rows: layout in 2 columns when many layers.
             int layerCount = unit.Layers.Count;
@@ -236,7 +285,7 @@ internal static partial class PdfExporter
                         + 3                           // gap
                         + captionH                    // "จากด้านข้าง" caption
                         + sideH                       // side view
-                        + (isCondo ? 3 + captionH + isoH : 0)  // iso view (condo only)
+                        + (wantsIso ? 3 + captionH + isoH : 0)  // iso view (stacks + condo)
                         + 8                           // gap
                         + layerListH                  // layer rows
                         + 6                           // gap
@@ -287,6 +336,19 @@ internal static partial class PdfExporter
                 float nameX = pillX + pillW + 10;
                 DrawRoundRect(nameX, iy + 7, 10, 10, 2, Fill(accentCol));
                 DrawText(productName, nameX + 14, iy + 5, 11, accentCol, bold: true);
+
+                // Foreign leftovers piled on this stack — flag their product swatch(es) in the header.
+                if (unit.ForeignScatter is { Count: > 0 })
+                {
+                    float fx = nameX + 14 + MeasureText(productName, 11, bold: true) + 10;
+                    DrawText("+ เศษ", fx, iy + 5, 10, C(0xB4, 0x53, 0x09), bold: true);
+                    fx += MeasureText("+ เศษ", 10, bold: true) + 4;
+                    foreach (var fpi in unit.ForeignScatter.Select(b => b.ProductIndex).Distinct())
+                    {
+                        DrawRoundRect(fx, iy + 8, 9, 9, 2, Fill(Palette[fpi % Palette.Length]));
+                        fx += 12;
+                    }
+                }
             }
 
             // Right: total + position
@@ -318,10 +380,11 @@ internal static partial class PdfExporter
             DrawUnitSideView(unitBoxes, ix, iy, diagW, sideH, xHorizontal);
             iy += sideH;
 
-            if (isCondo)
+            if (wantsIso)
             {
                 iy += 3;
-                DrawText("มุมมองเฉียง (เห็นทุกชนิดที่ผสมในแถว)", ix, iy, 7.5f, C(0x64, 0x74, 0x8B));
+                DrawText(isCondo ? "มุมมองเฉียง (เห็นทุกชนิดที่ผสมในแถว)" : "มุมมองเฉียง (3D)",
+                         ix, iy, 7.5f, C(0x64, 0x74, 0x8B));
                 iy += captionH;
                 DrawUnitIsoView(unitBoxes, ix, iy, diagW, isoH);
                 iy += isoH;
@@ -337,7 +400,8 @@ internal static partial class PdfExporter
                 int cIdx = i % layerCols;
                 float ex = ix + cIdx * colW;
                 float ey = iy + rIdx * layerRowH;
-                DrawLayerRow(unit.Layers[i], isCondo, accentCol, ex, ey);
+                DrawLayerRow(unit.Layers[i], isCondo, accentCol, ex, ey,
+                             unit.Kind == UnitKind.PrimaryStack ? unit.ProductIndex : null);
             }
             iy += layerListH + 6;
 
@@ -393,7 +457,7 @@ internal static partial class PdfExporter
         }
 
         private void DrawLayerRow(LayerEntry layer, bool isCondo, SKColor accentCol,
-                                   float ex, float ey)
+                                   float ex, float ey, int? stackProductIndex = null)
         {
             string layerText = $"ชั้น {layer.LayerNo}";
             DrawText(layerText, ex, ey, 9, accentCol, bold: true);
@@ -403,11 +467,17 @@ internal static partial class PdfExporter
             DrawText(head, tx, ey, 9, C(0x4B, 0x55, 0x63));
             tx += MeasureText(head, 9);
 
-            if (isCondo && layer.ByProduct.Count > 1)
+            // Show product swatch(es) for condo mixes AND for foreign leftovers (a different product
+            // piled on this stack) so the loader knows which SKU the box is.
+            bool foreignLayer = layer.IsScatter && stackProductIndex.HasValue
+                && layer.ByProduct.Any(bp => bp.ProductIndex != stackProductIndex.Value);
+            bool showProducts = isCondo || foreignLayer;
+
+            if (showProducts && layer.ByProduct.Count > 1)
             {
                 tx = DrawLayerProductBreakdown(layer.ByProduct, tx, ey);
             }
-            else if (isCondo && layer.ByProduct.Count == 1)
+            else if (showProducts && layer.ByProduct.Count == 1)
             {
                 tx = DrawLayerSingleProductTag(layer.ByProduct[0].ProductIndex, tx, ey);
             }
@@ -600,9 +670,12 @@ internal static partial class PdfExporter
             SKColor col = Palette[box.ProductIndex % Palette.Length];
             byte alpha  = box.Rotated ? (byte)170 : (byte)225;
             DrawRoundRect(rx, ry, rw, rh, 1.2f, Fill(col.WithAlpha(alpha)));
-            DrawRoundRect(rx, ry, rw, rh, 1.2f,
-                Stroke(new SKColor((byte)(col.Red * 0.45), (byte)(col.Green * 0.45),
-                                   (byte)(col.Blue * 0.45)), 0.5f));
+            if (box.Kind == PlacementKind.Scatter)
+                DrawRoundRect(rx, ry, rw, rh, 1.2f, Stroke(C(0xB4, 0x53, 0x09), 1.5f));   // เศษ — orange outline
+            else
+                DrawRoundRect(rx, ry, rw, rh, 1.2f,
+                    Stroke(new SKColor((byte)(col.Red * 0.45), (byte)(col.Green * 0.45),
+                                       (byte)(col.Blue * 0.45)), 0.5f));
         }
     }
 }

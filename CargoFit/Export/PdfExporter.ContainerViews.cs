@@ -145,8 +145,10 @@ internal static partial class PdfExporter
             else
                 FillPolyPath([p000, p010, p011, p001], DarkenColor(baseColor, 0.40f));
 
-            // Visible edges
-            SKColor edgeCol = DarkenColor(baseColor, 0.55f);
+            // Visible edges — scatter (leftover) boxes get an orange outline so they stand out in 3D.
+            SKColor edgeCol = box.Kind == PlacementKind.Scatter
+                ? C(0xB4, 0x53, 0x09)
+                : DarkenColor(baseColor, 0.55f);
             DrawEdgeLine(p001, p101, edgeCol); DrawEdgeLine(p101, p111, edgeCol);
             DrawEdgeLine(p111, p011, edgeCol); DrawEdgeLine(p011, p001, edgeCol);
             if (cosA >= 0) { DrawEdgeLine(p010, p011, edgeCol); DrawEdgeLine(p110, p111, edgeCol); DrawEdgeLine(p010, p110, edgeCol); }
