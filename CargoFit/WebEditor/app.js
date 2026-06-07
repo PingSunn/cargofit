@@ -175,6 +175,10 @@ function init3D() {
   r.setPixelRatio(window.devicePixelRatio || 1);
   r.setClearColor(0x0f172a, 1);
   host.append(r.domElement);
+  // setSize(..., false) keeps the draw buffer at w×dpr but sets no CSS size, so the
+  // canvas would otherwise lay out at buffer-pixel width (2× on retina) and overflow
+  // the page. Pin its display size to the container; the buffer stays high-res.
+  Object.assign(r.domElement.style, { display: 'block', width: '100%', height: '100%' });
   const scene = new THREE.Scene();
   const cam = new THREE.PerspectiveCamera(45, 1, 1, 20000);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 0.9));
