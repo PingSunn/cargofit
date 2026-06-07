@@ -39,6 +39,7 @@ internal sealed class ProductSettingsPanel : UserControl
         header.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
         header.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
         header.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+        header.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
 
         var titleText = new TextBlock
         {
@@ -50,14 +51,19 @@ internal sealed class ProductSettingsPanel : UserControl
         };
         header.Children.Add(titleText);
 
+        var webBtn = new Button { Content = "🌐  เปิดตัวแก้สินค้าบนเว็บ", Classes = { "primary" }, Margin = new Avalonia.Thickness(0, 0, 8, 0) };
+        webBtn.Click += (_, _) => WebEditorServer.OpenInBrowser();
+        Grid.SetColumn(webBtn, 1);
+        header.Children.Add(webBtn);
+
         var importBtn = new Button { Content = "↑  Import", Classes = { "outline" }, Margin = new Avalonia.Thickness(0, 0, 8, 0) };
         importBtn.Click += ProductImportBtn_Click;
-        Grid.SetColumn(importBtn, 1);
+        Grid.SetColumn(importBtn, 2);
         header.Children.Add(importBtn);
 
         var exportBtn = new Button { Content = "↓  Export", Classes = { "outline" } };
         exportBtn.Click += ProductExportBtn_Click;
-        Grid.SetColumn(exportBtn, 2);
+        Grid.SetColumn(exportBtn, 3);
         header.Children.Add(exportBtn);
 
         var subtitle = new TextBlock
@@ -69,7 +75,7 @@ internal sealed class ProductSettingsPanel : UserControl
             TextWrapping = TextWrapping.Wrap
         };
         Grid.SetRow(subtitle, 1);
-        Grid.SetColumnSpan(subtitle, 3);
+        Grid.SetColumnSpan(subtitle, 4);
         header.Children.Add(subtitle);
 
         root.Children.Add(header);

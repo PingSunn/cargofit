@@ -36,6 +36,14 @@
         <EmbeddedResource Include="..\products.json"   LogicalName="CargoFit.products.json"   />
     </ItemGroup>
 
+    <!-- Web product editor: static HTML/JS/CSS served by WebEditorServer from embedded resources -->
+    <ItemGroup>
+        <EmbeddedResource Include="WebEditor\index.html"          LogicalName="CargoFit.WebEditor.index.html" />
+        <EmbeddedResource Include="WebEditor\app.js"              LogicalName="CargoFit.WebEditor.app.js" />
+        <EmbeddedResource Include="WebEditor\styles.css"          LogicalName="CargoFit.WebEditor.styles.css" />
+        <EmbeddedResource Include="WebEditor\vendor\three.min.js" LogicalName="CargoFit.WebEditor.vendor.three.min.js" />
+    </ItemGroup>
+
     <!-- Bundled fonts: Prompt (Thai+Latin) — EmbeddedResource for SkiaSharp PDF, AvaloniaResource for UI -->
     <ItemGroup>
         <EmbeddedResource Include="Assets\Prompt-Regular.ttf" LogicalName="CargoFit.Prompt-Regular.ttf" />

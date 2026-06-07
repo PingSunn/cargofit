@@ -44,13 +44,22 @@
                    FontWeight="Bold"
                    Foreground="#1E293B" />
 
-        <Button x:Name="SettingsButton"
-                Grid.Column="2"
-                Content="Settings"
-                VerticalAlignment="Center"
-                HorizontalAlignment="Right"
-                Padding="16,6"
-                Click="OpenSettings_Click" />
+        <StackPanel Grid.Column="2"
+                    Orientation="Horizontal"
+                    Spacing="6"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Right">
+          <Button x:Name="ReloadButton"
+                  Content="↻ รีโหลดข้อมูล"
+                  Padding="12,6"
+                  CornerRadius="8"
+                  Click="ReloadData_Click" />
+          <Button x:Name="SettingsButton"
+                  Content="Settings"
+                  Padding="16,6"
+                  CornerRadius="8"
+                  Click="OpenSettings_Click" />
+        </StackPanel>
       </Grid>
     </Border>
 

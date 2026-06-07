@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CargoFit — ตัวแก้สินค้า</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">CargoFit · ตัวแก้สินค้า</div>
+    <div class="file-actions">
+      <span id="fileStatus" class="file-status">ยังไม่ได้เปิดไฟล์</span>
+      <button id="openBtn" class="btn">เปิด products.json</button>
+      <button id="saveBtn" class="btn primary" disabled>บันทึก</button>
+      <span class="sep"></span>
+      <button id="importBtn" class="btn ghost" title="โหลดไฟล์เข้ามาแก้ (fallback)">นำเข้า</button>
+      <button id="exportBtn" class="btn ghost" title="ดาวน์โหลดไฟล์ออก (fallback)">ส่งออก</button>
+      <input id="importInput" type="file" accept="application/json,.json" hidden>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main class="layout">
+    <!-- Sidebar: product list -->
+    <aside class="sidebar">
+      <input id="search" class="search" type="text" placeholder="ค้นหาสินค้า…">
+      <div id="productList" class="product-list"></div>
+      <button id="addProductBtn" class="btn outline block">+ เพิ่มสินค้า</button>
+    </aside>
+
+    <!-- Editor -->
+    <section id="editor" class="editor">
+      <div class="empty-state" id="emptyState">
+        <p>เปิดไฟล์ <code>products.json</code> แล้วเลือกสินค้าทางซ้ายเพื่อเริ่มแก้ไข</p>
+      </div>
+
+      <div id="editorBody" hidden>
+        <!-- product fields -->
+        <div class="card">
+          <div class="field-grid">
+            <label class="fld span2">ชื่อสินค้า<input id="f_desc" type="text"></label>
+            <label class="fld">ปริมาณ<input id="f_content" type="text" placeholder="365 ML"></label>
+            <label class="fld">Pack Size<input id="f_pack" type="text" placeholder="Pack 24"></label>
+            <label class="fld">น้ำหนัก/ลัง (KG)<input id="f_weight" type="number" step="0.01"></label>
+            <label class="fld">W (ซม.)<input id="f_w" type="number" step="0.1"></label>
+            <label class="fld">L (ซม.)<input id="f_l" type="number" step="0.1"></label>
+            <label class="fld">H (ซม.)<input id="f_h" type="number" step="0.1"></label>
+            <label class="fld">ชั้นต่อตั้ง (0=เต็มตู้)<input id="f_maxlayers" type="number" step="1" min="0"></label>
+            <label class="fld">คอนโด (0=อัตโนมัติ)<input id="f_condo" type="number" step="1" min="0"></label>
+          </div>
+          <div class="cbm-row">
+            <span id="cbmHint" class="cbm">CBM: 0.000000 m³</span>
+            <button id="deleteProductBtn" class="btn danger sm">ลบสินค้านี้</button>
+          </div>
+        </div>
+
+        <!-- previews -->
+        <div class="card">
+          <h3 class="card-title">Preview</h3>
+          <div class="preview-grid">
+            <div class="prev-2d">
+              <div class="prev-label">Layer A — ชั้นคี่ (1,3,5…) <span class="hint">คลิกกล่องเพื่อหมุน</span></div>
+              <div id="prevA" class="svg-wrap"></div>
+            </div>
+            <div class="prev-2d">
+              <div class="prev-label">Layer B — ชั้นคู่ Interlock (2,4,6…) <span class="hint">คลิกกล่องเพื่อหมุน</span></div>
+              <div id="prevB" class="svg-wrap"></div>
+            </div>
+          </div>
+          <div class="prev-3d">
+            <div class="prev-label">
+              3D Stack (ซ้อน A/B/A/B)
+              <span class="slider-wrap">ชั้น: <input id="layerSlider" type="range" min="1" max="20" value="6"><span id="layerCount">6</span></span>
+              <span class="hint">ลากเมาส์เพื่อหมุน · scroll ซูม</span>
+            </div>
+            <div id="prev3d" class="three-wrap"></div>
+          </div>
+        </div>
+
+        <!-- pattern editors -->
+        <div class="card">
+          <h3 class="card-title">Pattern A — ชั้นคี่</h3>
+          <div id="patternA" class="pattern"></div>
+          <button class="btn outline sm add-section" data-pat="A">+ เพิ่ม Section</button>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Pattern B — ชั้นคู่ (Interlock)</h3>
+          <div id="patternB" class="pattern"></div>
+          <button class="btn outline sm add-section" data-pat="B">+ เพิ่ม Section</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

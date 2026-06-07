@@ -32,6 +32,7 @@ public class PlanningView : UserControl
     private readonly Dictionary<ProductSpec, (Border Row, TextBox QtyBox)> _qtyMap = [];
 
     private StackPanel _quantityRows = null!;
+    private StackPanel _productStack = null!;
     private IsometricCanvas _canvas = null!;
     private StackPanel _statsPanel = null!;
     private readonly HashSet<int> _hiddenProducts = [];
@@ -242,63 +243,14 @@ public class PlanningView : UserControl
         };
         topPanel.Children.Add(searchBox);
 
-        var productStack = new StackPanel { Spacing = 3 };
-        foreach (var spec in ProductSpec.All)
-        {
-            var label = $"{spec.Description} {spec.Content}";
-
-            var contentGrid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,Auto") };
-            contentGrid.Children.Add(new TextBlock
-            {
-                Text = label,
-                FontSize = 12,
-                Foreground = Ink,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            });
-            var packTag = new Border
-            {
-                Background = Surface,
-                BorderBrush = BorderLight,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(5, 1),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(6, 0, 0, 0)
-            };
-            packTag.Child = new TextBlock { Text = spec.PackSize, FontSize = 10, Foreground = InkMuted };
-            Grid.SetColumn(packTag, 1);
-            contentGrid.Children.Add(packTag);
-
-            var cb = new CheckBox
-            {
-                Content = contentGrid,
-                FontSize = 12,
-                Foreground = Ink,
-                Padding = new Thickness(6, 7),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch
-            };
-            cb.IsCheckedChanged += (_, _) => UpdateQuantitySection();
-
-            var wrapper = new Border
-            {
-                Background = SurfaceSub,
-                BorderBrush = BorderLight,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(7),
-                Padding = new Thickness(2, 1)
-            };
-            wrapper.Child = cb;
-            productStack.Children.Add(wrapper);
-            _products.Add((cb, spec, wrapper));
-        }
+        _productStack = new StackPanel { Spacing = 3 };
+        PopulateProductChecklist();
 
         searchBox.TextChanged += (_, _) => FilterProducts(searchBox.Text ?? "");
 
         topPanel.Children.Add(new ScrollViewer
         {
-            Content = productStack,
+            Content = _productStack,
             Height = 260,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Margin = new Thickness(0, 0, 0, 4)
@@ -657,6 +609,76 @@ public class PlanningView : UserControl
             wrapper.IsVisible = q.Length == 0 ||
                 $"{spec.Description} {spec.Content}".Contains(q, StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    // Builds the product checkbox list from ProductSpec.All into _productStack / _products.
+    private void PopulateProductChecklist()
+    {
+        _products.Clear();
+        _productStack.Children.Clear();
+
+        foreach (var spec in ProductSpec.All)
+        {
+            var label = $"{spec.Description} {spec.Content}";
+
+            var contentGrid = new Grid { ColumnDefinitions = ColumnDefinitions.Parse("*,Auto") };
+            contentGrid.Children.Add(new TextBlock
+            {
+                Text = label,
+                FontSize = 12,
+                Foreground = Ink,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            var packTag = new Border
+            {
+                Background = Surface,
+                BorderBrush = BorderLight,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(5, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 0, 0)
+            };
+            packTag.Child = new TextBlock { Text = spec.PackSize, FontSize = 10, Foreground = InkMuted };
+            Grid.SetColumn(packTag, 1);
+            contentGrid.Children.Add(packTag);
+
+            var cb = new CheckBox
+            {
+                Content = contentGrid,
+                FontSize = 12,
+                Foreground = Ink,
+                Padding = new Thickness(6, 7),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch
+            };
+            cb.IsCheckedChanged += (_, _) => UpdateQuantitySection();
+
+            var wrapper = new Border
+            {
+                Background = SurfaceSub,
+                BorderBrush = BorderLight,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(2, 1)
+            };
+            wrapper.Child = cb;
+            _productStack.Children.Add(wrapper);
+            _products.Add((cb, spec, wrapper));
+        }
+    }
+
+    // Reloads products.json (edited via the web editor) and rebuilds the checklist.
+    // Called when the main window regains focus and from the manual "reload" button.
+    public void RefreshProducts()
+    {
+        ProductSpec.Load();
+        _qtyMap.Clear();
+        _quantityRows.Children.Clear();
+        PopulateProductChecklist();
+        if (_selectedContainerIndex >= 0 && _selectedContainerIndex < ContainerSpec.All.Count)
+            _canvas.SetData(ContainerSpec.All[_selectedContainerIndex], []);
     }
 
     private void UpdateQuantitySection()

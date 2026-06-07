@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
@@ -16,6 +18,9 @@ public partial class MainWindow : Window
     private readonly PlanningView   _planningView   = new();
     private InterlockDesignerView?  _interlockView;
 
+    // Last-seen products.json write time — used to reload only when the web editor actually saved.
+    private DateTime _lastProductsWrite = ProductsWriteTime();
+
     public MainWindow()
     {
         InitializeComponent();
@@ -24,8 +29,33 @@ public partial class MainWindow : Window
         LicenseManager.Verified += _ => Dispatcher.UIThread.Post(UpdateTrialBanner);
         UpdateTrialBanner();
 
+        // Reload products edited in the web editor when this window regains focus — but only if the
+        // file changed, so ordinary alt-tab/dialog-close doesn't wipe the user's current selections.
+        Activated += (_, _) => MaybeReloadProducts();
+        Closed += (_, _) => WebEditorServer.Stop();
+
         // เช็คอัปเดตใน background หลังแอปโหลดเสร็จ
         _ = CheckForUpdateAsync();
+    }
+
+    private static DateTime ProductsWriteTime()
+    {
+        try { return File.Exists(AppPaths.ProductsFile) ? File.GetLastWriteTimeUtc(AppPaths.ProductsFile) : DateTime.MinValue; }
+        catch { return DateTime.MinValue; }
+    }
+
+    private void MaybeReloadProducts()
+    {
+        var t = ProductsWriteTime();
+        if (t <= _lastProductsWrite) return;
+        _lastProductsWrite = t;
+        _planningView.RefreshProducts();
+    }
+
+    private void ReloadData_Click(object? sender, RoutedEventArgs e)
+    {
+        _lastProductsWrite = ProductsWriteTime();
+        _planningView.RefreshProducts();
     }
 
     private void NavPlanning_Click(object? sender, RoutedEventArgs e)  => ShowPlanning();
